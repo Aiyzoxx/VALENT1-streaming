@@ -72,3 +72,66 @@ export async function resolveVariantUrl(masterUrl: string, timeoutMs = 10000): P
     clearTimeout(timer);
   }
 }
+
+// Cache mémoire des résolutions pour un lancement instantané (0ms aux réouvertures)
+const streamUrlCache = new Map<string, string>();
+
+/**
+ * Vérifie si une master playlist contient des balises EXT-X-MEDIA non conformes
+ * rejetées par AVPlayer iOS (ex: URI pointant directement vers .vtt au lieu d'une
+ * sous-playlist .m3u8, provoquant CoreMediaErrorDomain -12646).
+ */
+export function hasIncompatibleMediaTags(manifestText: string): boolean {
+  return /#EXT-X-MEDIA:TYPE=SUBTITLES[^\n]+URI="[^"]+\.vtt"/i.test(manifestText);
+}
+
+/**
+ * Résout une URL de flux vers une URL 100% jouable sur AVPlayer iOS.
+ * Si le flux est une master playlist avec tags non conformes (ex: MobLand),
+ * bascule préventivement sur la meilleure variante vidéo directe.
+ * Si le flux est déjà conforme (ex: Evil Dead Burn) ou direct, le renvoie sans modification.
+ */
+export async function resolvePlayableStreamUrl(streamUrl: string, timeoutMs = 4000): Promise<string> {
+  if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
+  if (!streamUrl.includes('.m3u8')) return streamUrl;
+
+  const cached = streamUrlCache.get(streamUrl);
+  if (cached) return cached;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(streamUrl, {
+      signal: ctrl.signal,
+      headers: { Accept: 'application/vnd.apple.mpegurl, application/x-mpegurl, */*' },
+    });
+    if (!res.ok) {
+      streamUrlCache.set(streamUrl, streamUrl);
+      return streamUrl;
+    }
+
+    const text = await res.text();
+    if (!text.includes('#EXT-X-STREAM-INF')) {
+      streamUrlCache.set(streamUrl, streamUrl);
+      return streamUrl;
+    }
+
+    // Détection des anomalies connues pour faire crasher AVPlayer iOS (-12646)
+    if (hasIncompatibleMediaTags(text)) {
+      const variant = pickVariantUrl(text, streamUrl);
+      if (variant) {
+        streamUrlCache.set(streamUrl, variant);
+        return variant;
+      }
+    }
+
+    streamUrlCache.set(streamUrl, streamUrl);
+    return streamUrl;
+  } catch {
+    return streamUrl;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+

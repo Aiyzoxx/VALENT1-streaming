@@ -37,6 +37,7 @@ yarn-error.*
 serverkey.txt
 serverkey_clean
 server/.env
+error.txt
 
 # typescript
 *.tsbuildinfo

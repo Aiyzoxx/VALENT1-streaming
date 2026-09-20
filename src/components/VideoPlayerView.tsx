@@ -21,7 +21,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { THEME } from '../constants/theme';
-import { resolveVariantUrl } from '../api/hls';
+import { resolveVariantUrl, resolvePlayableStreamUrl } from '../api/hls';
 
 interface VideoPlayerViewProps {
   streamUrl: string;
@@ -154,11 +154,14 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const [activeUri, setActiveUri] = useState(streamUrl);
   const [fallbackTried, setFallbackTried] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+
   useEffect(() => {
     setActiveUri(streamUrl);
     setFallbackTried(false);
     setUsingFallback(false);
     setLoadTimedOut(false);
+    setIsRetrying(false);
   }, [streamUrl]);
 
   // Source HLS explicite (doc v57: contentType 'hls' requis si pas d'extension standard).
@@ -211,31 +214,40 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     let alive = true;
     (async () => {
       const variant = await resolveVariantUrl(streamUrl);
-      if (!alive || !variant) return;
+      if (!alive || !variant || variant === activeUri) return;
       setUsingFallback(true);
       setLoadTimedOut(false);
       didStartRef.current = false;
       setActiveUri(variant);
       try {
         await player.replaceAsync({ uri: variant, contentType: 'hls' as const });
+        player.play();
       } catch (_) {}
     })();
     return () => {
       alive = false;
     };
-  }, [status, fallbackTried, usingFallback, streamUrl, player]);
+  }, [status, fallbackTried, usingFallback, streamUrl, activeUri, player]);
 
   const handleRetry = useCallback(async () => {
     setLoadTimedOut(false);
+    setIsRetrying(true);
     didStartRef.current = false;
     try {
-      await player.replaceAsync(videoSource);
+      const playable = await resolvePlayableStreamUrl(streamUrl);
+      if (playable !== activeUri) {
+        setActiveUri(playable);
+      }
+      await player.replaceAsync({ uri: playable, contentType: 'hls' as const });
+      player.play();
     } catch (e) {
       try {
         player.play();
       } catch (_) {}
+    } finally {
+      setTimeout(() => setIsRetrying(false), 1000);
     }
-  }, [player, videoSource]);
+  }, [player, streamUrl, activeUri]);
 
   // Pistes audio réelles du flux HLS
   const { availableAudioTracks } = useEvent(player, 'availableAudioTracksChange', {
@@ -592,8 +604,8 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   };
 
   const duration = player?.duration ?? 0;
-  const isError = status === 'error' || loadTimedOut;
-  const isLoading = status === 'loading' && !loadTimedOut;
+  const isError = ((status === 'error' && fallbackTried) || loadTimedOut) && !isRetrying;
+  const isLoading = ((status === 'loading' || (status === 'error' && !fallbackTried)) || isRetrying) && !loadTimedOut;
   const playerErrorMsg =
     (error as { message?: string } | null)?.message ??
     (loadTimedOut ? 'Délai dépassé (30s) sans image. Réseau ou segments injoignables depuis l’iPhone.' : '');

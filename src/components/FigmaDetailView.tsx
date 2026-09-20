@@ -218,11 +218,13 @@ export const FigmaDetailView: React.FC<FigmaDetailViewProps> = ({
         const match = ep.url.match(/S(\d+)\/E(\d+)/i);
         const sNum = match ? parseInt(match[1], 10) : 1;
         const eNum = match ? parseInt(match[2], 10) : idx + 1;
+        const isTechnicalName = !ep.name || /pulse\s*\|/i.test(ep.name);
+        const epTitle = !isTechnicalName && ep.name?.trim() ? ep.name.trim() : `Épisode ${eNum}`;
         return {
           id: `${item.id}-s${sNum}-e${eNum}`,
           season: sNum,
           episodeNumber: eNum,
-          title: ep.name?.trim() ? ep.name : `Épisode ${eNum}`,
+          title: epTitle,
           duration: '45m',
           synopsis: `Épisode ${eNum} de la saison ${sNum}`,
           streamUrl: ep.url,

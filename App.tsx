@@ -37,6 +37,7 @@ import { FigmaProfileView } from './src/components/FigmaProfileView';
 import { SearchView } from './src/components/SearchView';
 import { VideoPlayerView } from './src/components/VideoPlayerView';
 import { AuthView } from './src/components/AuthView';
+import { resolvePlayableStreamUrl } from './src/api/hls';
 
 type TabType = 'home' | 'catalog' | 'profile';
 
@@ -150,32 +151,37 @@ function MainApp() {
   };
 
   // Launch video player for a MediaItem
-  const handlePlayMedia = (item: MediaItem, episode?: Episode) => {
+  const handlePlayMedia = async (item: MediaItem, episode?: Episode) => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (_) {}
 
-    const progress = getProgress(item.id);
+    const progressKey = episode ? `${item.id}_ep_${episode.id}` : item.id;
+    const progress = getProgress(progressKey) || getProgress(item.id);
     const initialTime = progress && !progress.completed ? progress.currentTime : 0;
+    const rawUrl = episode ? episode.streamUrl : item.streamUrl;
+    const playableUrl = await resolvePlayableStreamUrl(rawUrl);
 
     setActiveStream({
-      streamUrl: episode ? episode.streamUrl : item.streamUrl,
+      streamUrl: playableUrl,
       title: item.title,
       subtitle: episode ? `${episode.title} (${episode.duration})` : undefined,
       initialTime,
       isLive: item.type === 'live',
-      mediaId: item.id,
+      mediaId: progressKey,
     });
   };
 
   // Launch video player from M3U8 Tester
-  const handlePlayCustomStream = (stream: { url: string; title: string; isLive: boolean }) => {
+  const handlePlayCustomStream = async (stream: { url: string; title: string; isLive: boolean }) => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (_) {}
 
+    const playableUrl = await resolvePlayableStreamUrl(stream.url);
+
     setActiveStream({
-      streamUrl: stream.url,
+      streamUrl: playableUrl,
       title: stream.title,
       subtitle: stream.isLive ? 'Flux Direct M3U8' : 'Flux HLS Externe',
       isLive: stream.isLive,
