@@ -28,6 +28,8 @@ interface VideoPlayerViewProps {
   subtitle?: string;
   initialTime?: number;
   isLive?: boolean;
+  /** true si la source est un téléchargement local (fichier ou serveur 127.0.0.1) */
+  isLocalFile?: boolean;
   onClose: () => void;
   onProgressUpdate?: (currentTime: number, duration: number) => void;
 }
@@ -98,6 +100,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   subtitle,
   initialTime = 0,
   isLive = false,
+  isLocalFile: isLocalFileProp,
   onClose,
   onProgressUpdate,
 }) => {
@@ -159,8 +162,10 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   }, [activeSettingsTab, showSettings, tabFade]);
 
   // ── Source HLS + repli variante ──────────────────────────────────────────
-  // Fichier hors-ligne local (file://) : pas de repli réseau, messages dédiés.
-  const isLocalFile = streamUrl.startsWith('file:');
+  // Fichier hors-ligne local : pas de repli réseau, messages dédiés.
+  // (fichier direct ou servi via le serveur HTTP local 127.0.0.1)
+  const isLocalFile =
+    isLocalFileProp ?? (streamUrl.startsWith('file:') || streamUrl.includes('127.0.0.1'));
   const [activeUri, setActiveUri] = useState(streamUrl);
   const [fallbackTried, setFallbackTried] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);

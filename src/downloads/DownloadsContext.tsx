@@ -52,8 +52,10 @@ export interface DownloadRecord {
 
 interface DownloadsContextValue {
   downloads: DownloadRecord[];
-  /** URI locale si le contenu est téléchargé et présent, sinon null */
+  /** URI de lecture : http://127.0.0.1 si le serveur local tourne, sinon file:// */
   getLocalUri: (mediaId: string, episodeId?: string) => string | null;
+  /** Convertit une file:// URI enregistrée en URL lisible (serveur local si dispo) */
+  toServeUrl: (fileUri: string) => string;
   getRecord: (mediaId: string, episodeId?: string) => DownloadRecord | undefined;
   startDownload: (media: MediaItem, episode: Episode | null, quality: OfflineQuality) => Promise<void>;
   pauseDownload: (key: string) => void;
@@ -77,11 +79,20 @@ function offlineDir(key: string): Directory {
   return new Directory(Paths.document, 'offline', safe);
 }
 
+function offlineRoot(): Directory {
+  return new Directory(Paths.document, 'offline');
+}
+
 const DownloadsContext = createContext<DownloadsContextValue | null>(null);
 
 export function DownloadsProvider({ children }: { children: React.ReactNode }) {
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
+  // Origine du serveur HTTP local (ex. http://127.0.0.1:52341) — null si
+  // indisponible (Expo Go) : la lecture retombe sur file://.
+  const [serverOrigin, setServerOrigin] = useState<string | null>(null);
+  const serverOriginRef = useRef<string | null>(null);
+  serverOriginRef.current = serverOrigin;
   const activeRef = useRef<{ key: string; abort: AbortController } | null>(null);
   const downloadsRef = useRef<DownloadRecord[]>([]);
   downloadsRef.current = downloads;
@@ -153,6 +164,40 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       alive = false;
     };
   }, [persist]);
+
+  // ── Serveur HTTP local : AVPlayer/ExoPlayer ne lisent pas le HLS en file://,
+  // on sert le dossier offline sur http://127.0.0.1 (exempté ATS/cleartext).
+  // Absent en Expo Go (module natif manquant) : repli file:// silencieux.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { NativeModules } = require('react-native');
+        if (!NativeModules?.FPStaticServer) return;
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const StaticServer = require('react-native-static-server').default;
+        const rootPath = offlineRoot().uri.replace(/^file:\/\//, '');
+        const server = new StaticServer(0, rootPath, { localOnly: true, keepAlive: true });
+        const origin = (await server.start()) as string;
+        if (alive && origin) setServerOrigin(origin.replace(/\/$/, ''));
+      } catch (e) {
+        console.warn('Local static server unavailable:', e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const toServeUrl = useCallback((fileUri: string): string => {
+    const origin = serverOriginRef.current;
+    if (!origin) return fileUri;
+    const marker = '/offline/';
+    const idx = fileUri.indexOf(marker);
+    if (idx === -1) return fileUri;
+    return `${origin}/${fileUri.slice(idx + marker.length)}`;
+  }, []);
 
   const usedBytes = useMemo(
     () => downloads.reduce((t, r) => t + (r.status === 'done' ? r.bytesTotal ?? r.bytesDownloaded : r.bytesDownloaded), 0),
@@ -292,10 +337,11 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     (mediaId: string, episodeId?: string): string | null => {
       const rec = downloadsRef.current.find(r => r.key === downloadKeyFor(mediaId, episodeId ?? null));
       if (!rec || rec.status !== 'done' || !rec.localUri) return null;
-      return bundleComplete(rec.localUri) ? rec.localUri : null;
+      if (!bundleComplete(rec.localUri)) return null;
+      return toServeUrl(rec.localUri);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [downloads]
+    [downloads, toServeUrl]
   );
 
   const startDownload = useCallback(
@@ -403,6 +449,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     () => ({
       downloads,
       getLocalUri,
+      toServeUrl,
       getRecord,
       startDownload,
       pauseDownload,
@@ -411,7 +458,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       verifyLocal,
       totalBytes: usedBytes,
     }),
-    [downloads, getLocalUri, getRecord, startDownload, pauseDownload, resumeDownload, removeDownload, verifyLocal, usedBytes]
+    [downloads, getLocalUri, toServeUrl, getRecord, startDownload, pauseDownload, resumeDownload, removeDownload, verifyLocal, usedBytes]
   );
 
   return <DownloadsContext.Provider value={value}>{children}</DownloadsContext.Provider>;

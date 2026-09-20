@@ -51,6 +51,7 @@ interface ActiveStream {
   subtitle?: string;
   initialTime?: number;
   isLive?: boolean;
+  isLocalFile?: boolean;
   mediaId?: string;
 }
 
@@ -107,7 +108,7 @@ function GatedApp() {
 function MainApp({ initialTab }: { initialTab: TabType }) {
   const insets = useSafeAreaInsets();
   const { user, token, logout } = useAuth();
-  const { getLocalUri, verifyLocal } = useDownloads();
+  const { getLocalUri, verifyLocal, toServeUrl } = useDownloads();
   // Bascule auto vers la page hors-ligne quand la connexion tombe.
   const isOffline = useIsOffline();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
@@ -191,6 +192,7 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
       subtitle: episode ? `${episode.title} (${episode.duration})` : undefined,
       initialTime,
       isLive: item.type === 'live',
+      isLocalFile: !!localUri,
       mediaId: progressKey,
     });
   };
@@ -209,11 +211,12 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (_) {}
     setActiveStream({
-      streamUrl: rec.localUri,
+      streamUrl: toServeUrl(rec.localUri),
       title: rec.title,
       subtitle: rec.subtitle ?? undefined,
       initialTime: 0,
       isLive: false,
+      isLocalFile: true,
       mediaId: rec.episodeId ? `${rec.mediaId}_ep_${rec.episodeId}` : rec.mediaId,
     });
   };
@@ -238,6 +241,7 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
             subtitle={activeStream.subtitle}
             initialTime={activeStream.initialTime}
             isLive={activeStream.isLive}
+            isLocalFile={activeStream.isLocalFile}
             onClose={() => setActiveStream(null)}
             onProgressUpdate={(curr, dur) => {
               if (activeStream.mediaId) {
