@@ -24,6 +24,9 @@ jobs:
       - name: Prebuild native iOS project
         run: npx expo prebuild --platform ios --clean --non-interactive
 
+      - name: Install CocoaPods (génère le .xcworkspace)
+        run: cd ios && pod install
+
       - name: Locate Xcode workspace and scheme
         run: |
           ls ios/
