@@ -148,21 +148,59 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const seekBackScale = useRef(new Animated.Value(1)).current;
   const seekFwdScale = useRef(new Animated.Value(1)).current;
 
-  // Initialize expo-video player with HLS stream
-  const player = useVideoPlayer(streamUrl, (p) => {
+  // Source HLS explicite (doc v57: contentType 'hls' requis si pas d'extension standard).
+  const videoSource = useMemo(
+    () => ({ uri: streamUrl, contentType: 'hls' as const }),
+    [streamUrl]
+  );
+
+  // Setup sans play() immédiat : play quand readyToPlay (évite stall AVPlayer).
+  const player = useVideoPlayer(videoSource, (p) => {
     try {
       p.loop = false;
-      if (initialTime > 0) {
-        p.currentTime = initialTime;
-      }
-      p.play();
     } catch (e) {
       console.warn('Error setup player:', e);
     }
   });
 
-  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player?.playing ?? true });
-  const { status } = useEvent(player, 'statusChange', { status: player?.status ?? 'idle' });
+  const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player?.playing ?? false });
+  const { status, error } = useEvent(player, 'statusChange', { status: player?.status ?? 'idle' });
+
+  // Démarrage + seek initial quand le player est prêt.
+  const didStartRef = useRef(false);
+  useEffect(() => {
+    if (status === 'readyToPlay' && player && !didStartRef.current) {
+      didStartRef.current = true;
+      try {
+        if (initialTime > 0) player.currentTime = initialTime;
+        player.play();
+      } catch (e) {
+        console.warn('Error start player:', e);
+      }
+    }
+  }, [status, player, initialTime]);
+
+  // Timeout anti-spinner-infini : si toujours loading après 30s, bascule en erreur.
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
+  useEffect(() => {
+    setLoadTimedOut(false);
+    didStartRef.current = false;
+    if (status !== 'loading') return;
+    const t = setTimeout(() => setLoadTimedOut(true), 30000);
+    return () => clearTimeout(t);
+  }, [status, streamUrl]);
+
+  const handleRetry = useCallback(async () => {
+    setLoadTimedOut(false);
+    didStartRef.current = false;
+    try {
+      await player.replaceAsync(videoSource);
+    } catch (e) {
+      try {
+        player.play();
+      } catch (_) {}
+    }
+  }, [player, videoSource]);
 
   // Pistes audio réelles du flux HLS
   const { availableAudioTracks } = useEvent(player, 'availableAudioTracksChange', {
@@ -519,7 +557,11 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   };
 
   const duration = player?.duration ?? 0;
-  const isLoading = status === 'loading';
+  const isError = status === 'error' || loadTimedOut;
+  const isLoading = status === 'loading' && !loadTimedOut;
+  const playerErrorMsg =
+    (error as { message?: string } | null)?.message ??
+    (loadTimedOut ? 'Délai dépassé (30s) sans image. Réseau ou segments injoignables depuis l’iPhone.' : '');
 
   const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -545,6 +587,23 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
             <View style={styles.loadingOverlay}>
               <ActivityIndicator size="large" color={THEME.colors.primary} />
               <Text style={styles.loadingText}>Chargement du flux HLS...</Text>
+            </View>
+          )}
+
+          {/* Erreur player (remplace le spinner infini) */}
+          {isError && (
+            <View style={styles.loadingOverlay}>
+              <Ionicons name="alert-circle-outline" size={42} color={THEME.colors.primaryRed} />
+              <Text style={[styles.loadingText, { marginTop: 10, textAlign: 'center', paddingHorizontal: 24 }]}>
+                Impossible de lire ce flux.{playerErrorMsg ? `\n${playerErrorMsg}` : ''}
+              </Text>
+              <TouchableOpacity
+                style={{ marginTop: 16, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 10, backgroundColor: THEME.colors.primaryRed }}
+                onPress={handleRetry}
+                activeOpacity={0.85}
+              >
+                <Text style={{ color: '#09090F', fontFamily: THEME.fonts.extrabold, fontSize: 14 }}>Réessayer</Text>
+              </TouchableOpacity>
             </View>
           )}
 
