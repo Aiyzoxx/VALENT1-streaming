@@ -20,7 +20,9 @@
           "UIInterfaceOrientationLandscapeLeft",
           "UIInterfaceOrientationLandscapeRight"
         ],
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "StreamFlow utilise le microphone pour la recherche vocale.",
+        "NSSpeechRecognitionUsageDescription": "StreamFlow utilise la reconnaissance vocale pour vous aider à trouver des films et séries rapidement."
       }
     },
     "android": {
@@ -31,7 +33,10 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "package": "com.valent1.streamflow",
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -48,6 +53,13 @@
         "expo-screen-orientation",
         {
           "initialOrientation": "DEFAULT"
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "StreamFlow utilise le microphone pour la recherche vocale.",
+          "speechRecognitionPermission": "StreamFlow utilise la reconnaissance vocale pour trouver des films et séries rapidement."
         }
       ]
     ],

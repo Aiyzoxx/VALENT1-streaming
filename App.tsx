@@ -23,6 +23,8 @@ import { useFavorites } from './src/hooks/useFavorites';
 import { useWatchHistory } from './src/hooks/useWatchHistory';
 import { useAppFonts } from './src/hooks/useAppFonts';
 import { AuthProvider, useAuth } from './src/hooks/useAuth';
+import { useIsOffline } from './src/hooks/useIsOffline';
+import { DownloadsProvider, useDownloads, DownloadRecord } from './src/downloads/DownloadsContext';
 import {
   pullAndMerge,
   pushFavorites,
@@ -37,6 +39,7 @@ import { FigmaProfileView } from './src/components/FigmaProfileView';
 import { SearchView } from './src/components/SearchView';
 import { VideoPlayerView } from './src/components/VideoPlayerView';
 import { AuthView } from './src/components/AuthView';
+import { OfflineView } from './src/components/OfflineView';
 import { resolvePlayableStreamUrl } from './src/api/hls';
 
 type TabType = 'home' | 'catalog' | 'profile';
@@ -54,7 +57,9 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <GatedApp />
+        <DownloadsProvider>
+          <GatedApp />
+        </DownloadsProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );
@@ -66,6 +71,9 @@ function GatedApp() {
   const fontsReady = useAppFonts();
   const { user, token, loading: authLoading } = useAuth();
   const [synced, setSynced] = useState(false);
+  // Clé du dernier MainApp monté : guest -> user.id = connexion fraîche -> profil.
+  // Lancement avec session restaurée -> accueil.
+  const prevKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!fontsReady || authLoading) return;
@@ -89,18 +97,24 @@ function GatedApp() {
   }, [fontsReady, authLoading, user, token]);
 
   if (!fontsReady || authLoading || !synced) return null;
-  return <MainApp key={user?.id ?? 'guest'} />;
+  const key = user?.id ?? 'guest';
+  const initialTab: TabType = prevKeyRef.current === 'guest' && key !== 'guest' ? 'profile' : 'home';
+  prevKeyRef.current = key;
+  return <MainApp key={key} initialTab={initialTab} />;
 }
 
-function MainApp() {
+function MainApp({ initialTab }: { initialTab: TabType }) {
   const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState<TabType>('home');
+  const { user, token, logout } = useAuth();
+  const { getLocalUri } = useDownloads();
+  // Bascule auto vers la page hors-ligne quand la connexion tombe.
+  const isOffline = useIsOffline();
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [detailItem, setDetailItem] = useState<MediaItem | null>(null);
   const [activeStream, setActiveStream] = useState<ActiveStream | null>(null);
 
   const { isFavorite, toggleFavorite, favoriteItems, favoriteIds } = useFavorites();
   const { continueWatchingItems, updateProgress, getProgress, history, clearItem } = useWatchHistory();
-  const { user, token, logout } = useAuth();
 
   // Push compte en debounce quand le local change (connecté uniquement).
   useEffect(() => {
@@ -159,8 +173,9 @@ function MainApp() {
     const progressKey = episode ? `${item.id}_ep_${episode.id}` : item.id;
     const progress = getProgress(progressKey) || getProgress(item.id);
     const initialTime = progress && !progress.completed ? progress.currentTime : 0;
-    const rawUrl = episode ? episode.streamUrl : item.streamUrl;
-    const playableUrl = await resolvePlayableStreamUrl(rawUrl);
+    // Version hors-ligne prioritaire si téléchargée.
+    const localUri = getLocalUri(item.id, episode?.id);
+    const playableUrl = localUri ?? (await resolvePlayableStreamUrl(episode ? episode.streamUrl : item.streamUrl));
 
     setActiveStream({
       streamUrl: playableUrl,
@@ -169,6 +184,22 @@ function MainApp() {
       initialTime,
       isLive: item.type === 'live',
       mediaId: progressKey,
+    });
+  };
+
+  // Launch video player from a finished offline download.
+  const handlePlayDownload = (rec: DownloadRecord) => {
+    if (!rec.localUri || rec.status !== 'done') return;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (_) {}
+    setActiveStream({
+      streamUrl: rec.localUri,
+      title: rec.title,
+      subtitle: rec.subtitle ?? undefined,
+      initialTime: 0,
+      isLive: false,
+      mediaId: rec.episodeId ? `${rec.mediaId}_ep_${rec.episodeId}` : rec.mediaId,
     });
   };
 
@@ -231,8 +262,15 @@ function MainApp() {
         </View>
       )}
 
-      {/* 3. Contenu Principal de l'Application (Screen 1 & Onglets) */}
-      {!activeStream && !detailItem && (
+      {/* 3. Contenu Principal — page hors-ligne exclusive si pas de connexion */}
+      {!activeStream && !detailItem && isOffline && (
+        <View style={styles.safeArea}>
+          <View style={styles.mainContent}>
+            <OfflineView onPlayDownload={handlePlayDownload} />
+          </View>
+        </View>
+      )}
+      {!activeStream && !detailItem && !isOffline && (
         <View style={styles.safeArea}>
           <View style={styles.mainContent}>
             {/* Conteneur animé pour les changements d'onglets */}
@@ -273,6 +311,7 @@ function MainApp() {
                   onSelectItem={setDetailItem}
                   onPlayItem={handlePlayMedia}
                   onPlayCustomStream={handlePlayCustomStream}
+                  onPlayDownload={handlePlayDownload}
                   accountName={user.name}
                   accountEmail={user.email}
                   onLogout={logout}

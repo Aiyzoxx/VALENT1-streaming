@@ -6,6 +6,7 @@ import {
   TextInput,
   TouchableOpacity,
   TextInputProps,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../../constants/theme';
@@ -17,6 +18,10 @@ interface SearchBarFigmaProps extends TextInputProps {
   onMicPress?: () => void;
   placeholder?: string;
   style?: ViewStyle;
+  /** true quand la dictée vocale est active — l'icône micro devient rouge */
+  micActive?: boolean;
+  /** Animated.Value (scale) pour la pulsation du micro — optionnel */
+  micPulse?: Animated.Value;
 }
 
 export const SearchBarFigma: React.FC<SearchBarFigmaProps> = ({
@@ -26,8 +31,13 @@ export const SearchBarFigma: React.FC<SearchBarFigmaProps> = ({
   onMicPress,
   placeholder = 'Search',
   style,
+  micActive = false,
+  micPulse,
   ...rest
 }) => {
+  const micColor = micActive ? THEME.colors.primary ?? '#E50914' : THEME.colors.textMuted;
+  const micName = micActive ? 'mic' : 'mic-outline';
+
   return (
     <View style={[styles.container, style]}>
       <Ionicons
@@ -65,7 +75,13 @@ export const SearchBarFigma: React.FC<SearchBarFigmaProps> = ({
             activeOpacity={0.7}
             style={styles.micButton}
           >
-            <Ionicons name="mic-outline" size={20} color={THEME.colors.textMuted} />
+            {micPulse ? (
+              <Animated.View style={{ transform: [{ scale: micPulse }] }}>
+                <Ionicons name={micName} size={20} color={micColor} />
+              </Animated.View>
+            ) : (
+              <Ionicons name={micName} size={20} color={micColor} />
+            )}
           </TouchableOpacity>
         </>
       )}

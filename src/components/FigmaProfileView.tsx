@@ -16,6 +16,8 @@ import { MediaItem, WatchProgress } from '../types/media';
 import { THEME } from '../constants/theme';
 import { ScreenBackground, MediaPosterCard, AvatarPlaceholder } from './common';
 import { StreamTesterView } from './StreamTesterView';
+import { DownloadCard, formatBytes } from './DownloadCard';
+import { useDownloads, DownloadRecord, OFFLINE_QUOTA_BYTES } from '../downloads/DownloadsContext';
 
 interface FigmaProfileViewProps {
   favoriteItems: MediaItem[];
@@ -23,11 +25,14 @@ interface FigmaProfileViewProps {
   onSelectItem: (item: MediaItem) => void;
   onPlayItem: (item: MediaItem) => void;
   onPlayCustomStream: (stream: { url: string; title: string; isLive: boolean }) => void;
+  onPlayDownload?: (rec: DownloadRecord) => void;
   onRemoveHistoryItem?: (id: string) => void;
   accountName?: string;
   accountEmail?: string;
   onLogout?: () => void;
 }
+
+type ProfileSubTab = 'favorites' | 'history' | 'studio' | 'downloads';
 
 const { width } = Dimensions.get('window');
 const GRID_GAP = THEME.spacing.md;
@@ -149,18 +154,20 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
   onSelectItem,
   onPlayItem,
   onPlayCustomStream,
+  onPlayDownload,
   accountName,
   accountEmail,
   onLogout,
   onRemoveHistoryItem,
 }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'favorites' | 'history' | 'studio'>('favorites');
+  const [activeSubTab, setActiveSubTab] = useState<ProfileSubTab>('favorites');
+  const { downloads, totalBytes, pauseDownload, resumeDownload, removeDownload } = useDownloads();
   const insets = useSafeAreaInsets();
   const topPad = insets.top > 0 ? insets.top + 8 : Platform.OS === 'ios' ? 14 : 8;
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const transYAnim = useRef(new Animated.Value(0)).current;
 
-  const handleTabChange = (tab: 'favorites' | 'history' | 'studio') => {
+  const handleTabChange = (tab: ProfileSubTab) => {
     if (tab === activeSubTab) return;
     try {
       Haptics.selectionAsync();
@@ -255,6 +262,11 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
             isActive={activeSubTab === 'studio'}
             onPress={() => handleTabChange('studio')}
           />
+          <AnimatedSubTabBtn
+            label={`Téléchargés (${downloads.length})`}
+            isActive={activeSubTab === 'downloads'}
+            onPress={() => handleTabChange('downloads')}
+          />
         </View>
 
         {/* 4. Contenu avec transition animée fluide */}
@@ -310,6 +322,39 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
           {activeSubTab === 'studio' && (
             <View style={styles.studioContainer}>
               <StreamTesterView onPlayStream={onPlayCustomStream} />
+            </View>
+          )}
+
+          {/* Tab 4: Téléchargements hors-ligne */}
+          {activeSubTab === 'downloads' && (
+            <View>
+              <View style={styles.dlQuotaRow}>
+                <Ionicons name="save-outline" size={15} color={THEME.colors.textMuted} />
+                <Text style={styles.dlQuotaText}>
+                  {formatBytes(totalBytes)} / {formatBytes(OFFLINE_QUOTA_BYTES)} · WiFi uniquement
+                </Text>
+              </View>
+              {downloads.length > 0 ? (
+                downloads
+                  .slice()
+                  .sort((a, b) => b.createdAt - a.createdAt)
+                  .map(rec => (
+                    <DownloadCard
+                      key={rec.key}
+                      rec={rec}
+                      onPause={() => pauseDownload(rec.key)}
+                      onResume={() => resumeDownload(rec.key)}
+                      onDelete={() => removeDownload(rec.key)}
+                      onPlay={rec.status === 'done' ? () => onPlayDownload?.(rec) : undefined}
+                    />
+                  ))
+              ) : (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="arrow-down-circle-outline" size={48} color={THEME.colors.textMuted} />
+                  <Text style={styles.emptyTitle}>Aucun téléchargement</Text>
+                  <Text style={styles.emptySubtitle}>Téléchargez films et épisodes depuis leur fiche pour les regarder sans connexion.</Text>
+                </View>
+              )}
             </View>
           )}
         </Animated.View>
@@ -476,6 +521,18 @@ const styles = StyleSheet.create({
   },
   studioContainer: {
     paddingHorizontal: THEME.spacing.screen,
+  },
+  dlQuotaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: THEME.spacing.screen,
+    marginBottom: THEME.spacing.sm,
+  },
+  dlQuotaText: {
+    fontSize: THEME.typography.sizes.small,
+    fontFamily: THEME.fonts.medium,
+    color: THEME.colors.textMuted,
   },
   emptyContainer: {
     width: '100%',

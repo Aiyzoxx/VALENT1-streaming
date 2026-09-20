@@ -7,12 +7,11 @@ import {
   TouchableWithoutFeedback,
   Platform,
   StatusBar,
-  Modal,
   ScrollView,
   ActivityIndicator,
   Animated,
 } from 'react-native';
-import { useVideoPlayer, VideoView, VideoContentFit, AudioTrack, SubtitleTrack, VideoTrack } from 'expo-video';
+import { useVideoPlayer, VideoView, VideoContentFit, AudioTrack, SubtitleTrack } from 'expo-video';
 import { useEvent } from 'expo';
 import { Ionicons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
@@ -33,52 +32,38 @@ interface VideoPlayerViewProps {
   onProgressUpdate?: (currentTime: number, duration: number) => void;
 }
 
+type SettingsTab = 'quality' | 'speed' | 'audio';
+
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: 'quality', label: 'Qualité' },
+  { id: 'speed', label: 'Vitesse' },
+  { id: 'audio', label: 'Audio' },
+];
+
+const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
 const formatTime = (seconds: number): string => {
   if (isNaN(seconds) || seconds < 0) return '00:00';
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
-
-  if (h > 0) {
-    return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
-  }
+  if (h > 0) return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
 };
 
 const formatSubtitleTrackInfo = (track: SubtitleTrack) => {
   const raw = `${track.label || ''} ${track.name || ''} ${track.language || ''}`.toLowerCase();
   const isForced = raw.includes('forced') || raw.includes('forcé');
-
   if (raw.includes('french') || raw.includes('français') || track.language === 'fr' || track.language === 'fre') {
-    if (isForced) {
-      return {
-        title: 'Français (Forcé)',
-        description: 'Traductions des passages étrangers uniquement (idéal avec la VF)',
-        badge: 'FORCÉ',
-      };
-    }
-    return {
-      title: 'Français (Complet)',
-      description: 'Tous les dialogues sous-titrés en français',
-      badge: 'COMPLET',
-    };
+    return isForced
+      ? { title: 'Français (Forcé)', description: 'Traductions des passages étrangers uniquement', badge: 'FORCÉ' }
+      : { title: 'Français (Complet)', description: 'Tous les dialogues sous-titrés en français', badge: 'COMPLET' };
   }
-
   if (raw.includes('english') || raw.includes('anglais') || track.language === 'en' || track.language === 'eng') {
-    if (isForced) {
-      return {
-        title: 'Anglais (Forcé)',
-        description: 'Passages en langues étrangères traduits en anglais',
-        badge: 'FORCÉ',
-      };
-    }
-    return {
-      title: 'Anglais (English)',
-      description: 'Tous les dialogues sous-titrés en anglais',
-      badge: 'VO',
-    };
+    return isForced
+      ? { title: 'Anglais (Forcé)', description: 'Passages étrangers traduits en anglais', badge: 'FORCÉ' }
+      : { title: 'Anglais (English)', description: 'Tous les dialogues sous-titrés en anglais', badge: 'VO' };
   }
-
   return {
     title: track.label || track.name || `Sous-titre (${track.language?.toUpperCase() || 'SUB'})`,
     description: `Langue : ${track.language ? track.language.toUpperCase() : 'Non spécifié'}`,
@@ -88,28 +73,23 @@ const formatSubtitleTrackInfo = (track: SubtitleTrack) => {
 
 const formatAudioTrackInfo = (track: AudioTrack) => {
   const raw = `${track.label || ''} ${track.name || ''} ${track.language || ''}`.toLowerCase();
-
   if (raw.includes('french') || raw.includes('français') || track.language === 'fr' || track.language === 'fre') {
-    return {
-      title: 'Français (VF)',
-      description: 'Version française doublée',
-      badge: 'VF',
-    };
+    return { title: 'Français (VF)', description: 'Version française doublée', badge: 'VF' };
   }
-
   if (raw.includes('english') || raw.includes('anglais') || track.language === 'en' || track.language === 'eng') {
-    return {
-      title: 'Anglais (VO)',
-      description: 'Version originale anglaise',
-      badge: 'VO',
-    };
+    return { title: 'Anglais (VO)', description: 'Version originale anglaise', badge: 'VO' };
   }
-
   return {
     title: track.label || track.name || `Piste (${track.language?.toUpperCase() || 'AUDIO'})`,
     description: `Langue : ${track.language ? track.language.toUpperCase() : 'Non spécifié'}`,
     badge: track.language ? track.language.toUpperCase() : 'AUDIO',
   };
+};
+
+const haptic = (style: Haptics.ImpactFeedbackStyle) => {
+  try {
+    Haptics.impactAsync(style);
+  } catch (_) {}
 };
 
 export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
@@ -126,13 +106,10 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [contentFit, setContentFit] = useState<VideoContentFit>('contain');
   const [showSettings, setShowSettings] = useState(false);
-  const [activeSettingsTab, setActiveSettingsTab] = useState<'speed' | 'quality' | 'audio'>('quality');
-  
-  // Custom Controls State
-  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
-  const [selectedQuality, setSelectedQuality] = useState<string>('Source');
-  const [selectedAudio, setSelectedAudio] = useState<string>('Défaut');
-  const [selectedSubtitle, setSelectedSubtitle] = useState<string>('Désactivé');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('quality');
+
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [selectedQuality, setSelectedQuality] = useState('Source');
 
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [scrubValue, setScrubValue] = useState(0);
@@ -141,20 +118,52 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const videoViewRef = useRef<any>(null);
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Micro-animations Refs
   const controlsOpacity = useRef(new Animated.Value(1)).current;
-  const sheetSlideAnim = useRef(new Animated.Value(350)).current;
+  const sheetSlideAnim = useRef(new Animated.Value(380)).current;
   const sheetFadeAnim = useRef(new Animated.Value(0)).current;
   const playBtnScale = useRef(new Animated.Value(1)).current;
-  const seekBackScale = useRef(new Animated.Value(1)).current;
-  const seekFwdScale = useRef(new Animated.Value(1)).current;
 
-  // URI réellement jouée : master par défaut, variante directe en repli
-  // si AVPlayer rejette la master (-12646 playlist parse error).
+  // Glissé vertical des barres + flash central play/pause/seek
+  const topBarSlide = controlsOpacity.interpolate({ inputRange: [0, 1], outputRange: [-14, 0] });
+  const bottomBarSlide = controlsOpacity.interpolate({ inputRange: [0, 1], outputRange: [14, 0] });
+  const [flash, setFlash] = useState<{ kind: 'back' | 'fwd'; id: number } | null>(null);
+  const flashOpacity = useRef(new Animated.Value(0)).current;
+  const flashScale = useRef(new Animated.Value(0.7)).current;
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!flash) return;
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashOpacity.setValue(0);
+    flashScale.setValue(0.7);
+    Animated.parallel([
+      Animated.timing(flashOpacity, { toValue: 1, duration: 120, useNativeDriver: true }),
+      Animated.spring(flashScale, { toValue: 1, speed: 22, bounciness: 8, useNativeDriver: true }),
+    ]).start();
+    flashTimer.current = setTimeout(() => {
+      Animated.timing(flashOpacity, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
+        setFlash(cur => (cur?.id === flash.id ? null : cur));
+      });
+    }, 450);
+    return () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    };
+  }, [flash, flashOpacity, flashScale]);
+
+  // Fondu du contenu à chaque changement d'onglet réglages
+  const tabFade = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!showSettings) return;
+    tabFade.setValue(0);
+    Animated.timing(tabFade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+  }, [activeSettingsTab, showSettings, tabFade]);
+
+  // ── Source HLS + repli variante ──────────────────────────────────────────
   const [activeUri, setActiveUri] = useState(streamUrl);
   const [fallbackTried, setFallbackTried] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
 
   useEffect(() => {
     setActiveUri(streamUrl);
@@ -164,14 +173,12 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     setIsRetrying(false);
   }, [streamUrl]);
 
-  // Source HLS explicite (doc v57: contentType 'hls' requis si pas d'extension standard).
   const videoSource = useMemo(
     () => ({ uri: activeUri, contentType: 'hls' as const }),
     [activeUri]
   );
 
-  // Setup sans play() immédiat : play quand readyToPlay (évite stall AVPlayer).
-  const player = useVideoPlayer(videoSource, (p) => {
+  const player = useVideoPlayer(videoSource, p => {
     try {
       p.loop = false;
     } catch (e) {
@@ -182,7 +189,6 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const { isPlaying } = useEvent(player, 'playingChange', { isPlaying: player?.playing ?? false });
   const { status, error } = useEvent(player, 'statusChange', { status: player?.status ?? 'idle' });
 
-  // Démarrage + seek initial quand le player est prêt.
   const didStartRef = useRef(false);
   useEffect(() => {
     if (status === 'readyToPlay' && player && !didStartRef.current) {
@@ -196,8 +202,6 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     }
   }, [status, player, initialTime]);
 
-  // Timeout anti-spinner-infini : si toujours loading après 30s, bascule en erreur.
-  const [loadTimedOut, setLoadTimedOut] = useState(false);
   useEffect(() => {
     setLoadTimedOut(false);
     didStartRef.current = false;
@@ -206,8 +210,6 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     return () => clearTimeout(t);
   }, [status, streamUrl, activeUri]);
 
-  // Repli automatique : si AVPlayer rejette la master playlist (-12646),
-  // bascule une fois sur la variante directe (muxée vidéo + audio).
   useEffect(() => {
     if (status !== 'error' || fallbackTried || usingFallback) return;
     setFallbackTried(true);
@@ -235,12 +237,10 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     didStartRef.current = false;
     try {
       const playable = await resolvePlayableStreamUrl(streamUrl);
-      if (playable !== activeUri) {
-        setActiveUri(playable);
-      }
+      if (playable !== activeUri) setActiveUri(playable);
       await player.replaceAsync({ uri: playable, contentType: 'hls' as const });
       player.play();
-    } catch (e) {
+    } catch {
       try {
         player.play();
       } catch (_) {}
@@ -249,72 +249,56 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     }
   }, [player, streamUrl, activeUri]);
 
-  // Pistes audio réelles du flux HLS
+  // ── Pistes ───────────────────────────────────────────────────────────────
   const { availableAudioTracks } = useEvent(player, 'availableAudioTracksChange', {
     availableAudioTracks: player?.availableAudioTracks ?? [],
   });
   const { audioTrack } = useEvent(player, 'audioTrackChange', {
     audioTrack: player?.audioTrack ?? null,
   });
-
-  // Pistes de sous-titres réelles du flux HLS
   const { availableSubtitleTracks } = useEvent(player, 'availableSubtitleTracksChange', {
     availableSubtitleTracks: player?.availableSubtitleTracks ?? [],
   });
   const { subtitleTrack } = useEvent(player, 'subtitleTrackChange', {
     subtitleTrack: player?.subtitleTrack ?? null,
   });
-
-  // Piste vidéo active et résolution réelle détectée
   const { videoTrack } = useEvent(player, 'videoTrackChange', {
     videoTrack: player?.videoTrack ?? null,
   });
 
   const detectedResolution = useMemo(() => {
-    if (videoTrack?.size?.height && videoTrack?.size?.width) {
-      const h = videoTrack.size.height;
-      const w = videoTrack.size.width;
-      if (h >= 2160 || w >= 3840) return { label: '4K Ultra HD', resolution: `${w} × ${h}`, badge: '4K HDR' };
-      if (h >= 1080 || w >= 1920) return { label: '1080p Full HD', resolution: `${w} × ${h}`, badge: '1080p' };
-      if (h >= 720 || w >= 1280) return { label: '720p Haute Définition', resolution: `${w} × ${h}`, badge: '720p' };
-      return { label: `${h}p`, resolution: `${w} × ${h}`, badge: `${h}p` };
-    }
-    return { label: '1080p Full HD', resolution: '1920 × 1080', badge: '1080p' };
+    const h = videoTrack?.size?.height ?? 0;
+    const w = videoTrack?.size?.width ?? 0;
+    if (h >= 2160 || w >= 3840) return { label: '4K Ultra HD', detail: `${w} × ${h}`, badge: '4K' };
+    if (h >= 1080 || w >= 1920) return { label: '1080p Full HD', detail: `${w} × ${h}`, badge: '1080p' };
+    if (h >= 720 || w >= 1280) return { label: '720p HD', detail: `${w} × ${h}`, badge: '720p' };
+    if (h > 0) return { label: `${h}p`, detail: `${w} × ${h}`, badge: `${h}p` };
+    return { label: 'Qualité source', detail: 'Détection en cours', badge: 'HD' };
   }, [videoTrack]);
 
-  // Déduplication des sous-titres (élimine les doublons de flux remontés par iOS AVPlayer)
   const uniqueSubtitleTracks = useMemo(() => {
     const seen = new Set<string>();
-    const list: SubtitleTrack[] = [];
-
-    for (const track of availableSubtitleTracks) {
-      const info = formatSubtitleTrackInfo(track);
-      const key = `${info.title.toLowerCase()}_${track.language?.toLowerCase() || ''}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        list.push(track);
-      }
-    }
-    return list;
+    return availableSubtitleTracks.filter(t => {
+      const info = formatSubtitleTrackInfo(t);
+      const key = `${info.title.toLowerCase()}_${t.language?.toLowerCase() || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }, [availableSubtitleTracks]);
 
-  // Déduplication des pistes audio
   const uniqueAudioTracks = useMemo(() => {
     const seen = new Set<string>();
-    const list: AudioTrack[] = [];
-
-    for (const track of availableAudioTracks) {
-      const info = formatAudioTrackInfo(track);
-      const key = `${info.title.toLowerCase()}_${track.language?.toLowerCase() || ''}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        list.push(track);
-      }
-    }
-    return list;
+    return availableAudioTracks.filter(t => {
+      const info = formatAudioTrackInfo(t);
+      const key = `${info.title.toLowerCase()}_${t.language?.toLowerCase() || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }, [availableAudioTracks]);
 
-  // Clean up orientation when unmounting player
+  // ── Orientation / progression / auto-hide ────────────────────────────────
   useEffect(() => {
     return () => {
       try {
@@ -323,30 +307,21 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     };
   }, []);
 
-  // Update current time state periodically
   useEffect(() => {
     const interval = setInterval(() => {
       if (player && !isScrubbing) {
         const curr = player.currentTime;
         setCurrentTimeState(curr);
-        if (onProgressUpdate && player.duration > 0) {
-          onProgressUpdate(curr, player.duration);
-        }
+        if (onProgressUpdate && player.duration > 0) onProgressUpdate(curr, player.duration);
       }
     }, 500);
-
     return () => clearInterval(interval);
   }, [player, isScrubbing, onProgressUpdate]);
 
-  // Handle auto-hide of controls after 3.5 seconds of inactivity
   const resetHideTimer = useCallback(() => {
-    if (hideControlsTimer.current) {
-      clearTimeout(hideControlsTimer.current);
-    }
+    if (hideControlsTimer.current) clearTimeout(hideControlsTimer.current);
     if (isPlaying) {
-      hideControlsTimer.current = setTimeout(() => {
-        setControlsVisible(false);
-      }, 3500);
+      hideControlsTimer.current = setTimeout(() => setControlsVisible(false), 3500);
     }
   }, [isPlaying]);
 
@@ -363,127 +338,52 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
       duration: 220,
       useNativeDriver: true,
     }).start();
-  }, [controlsVisible]);
+  }, [controlsVisible, controlsOpacity]);
 
   const toggleControls = () => {
     setControlsVisible(prev => {
-      const next = !prev;
-      if (next) resetHideTimer();
-      return next;
+      if (!prev) resetHideTimer();
+      return !prev;
     });
   };
 
-  const openSettings = (tab?: 'speed' | 'quality' | 'audio') => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-    if (tab) setActiveSettingsTab(tab);
-    setShowSettings(true);
-    sheetSlideAnim.setValue(350);
-    sheetFadeAnim.setValue(0);
-    Animated.parallel([
-      Animated.spring(sheetSlideAnim, {
-        toValue: 0,
-        speed: 18,
-        bounciness: 4,
-        useNativeDriver: true,
-      }),
-      Animated.timing(sheetFadeAnim, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start();
+  // ── Actions ──────────────────────────────────────────────────────────────
+  const flashId = useRef(0);
+  const showFlash = (kind: 'back' | 'fwd') => {
+    flashId.current += 1;
+    setFlash({ kind, id: flashId.current });
   };
 
-  const closeSettings = () => {
-    Animated.parallel([
-      Animated.timing(sheetSlideAnim, {
-        toValue: 350,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-      Animated.timing(sheetFadeAnim, {
-        toValue: 0,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setShowSettings(false);
-    });
-  };
-
-  // Play / Pause toggle with spring bounce
   const togglePlayPause = () => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (_) {}
-
+    haptic(Haptics.ImpactFeedbackStyle.Medium);
     Animated.sequence([
-      Animated.timing(playBtnScale, {
-        toValue: 0.88,
-        duration: 80,
-        useNativeDriver: true,
-      }),
-      Animated.spring(playBtnScale, {
-        toValue: 1,
-        speed: 20,
-        bounciness: 9,
-        useNativeDriver: true,
-      }),
+      Animated.timing(playBtnScale, { toValue: 0.88, duration: 80, useNativeDriver: true }),
+      Animated.spring(playBtnScale, { toValue: 1, speed: 20, bounciness: 9, useNativeDriver: true }),
     ]).start();
-
-    if (player) {
-      try {
-        if (player.playing) {
-          player.pause();
-        } else {
-          player.play();
-        }
-      } catch (e) {
-        console.warn('Erreur play/pause:', e);
-      }
-      resetHideTimer();
+    if (!player) return;
+    try {
+      if (player.playing) player.pause();
+      else player.play();
+    } catch (e) {
+      console.warn('Erreur play/pause:', e);
     }
+    resetHideTimer();
   };
 
-  // Seek forward / backward (-10s / +10s) with spring bounce
   const seekBy = (seconds: number) => {
+    haptic(Haptics.ImpactFeedbackStyle.Light);
+    showFlash(seconds < 0 ? 'back' : 'fwd');
+    if (!player) return;
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-
-    const targetAnim = seconds < 0 ? seekBackScale : seekFwdScale;
-    Animated.sequence([
-      Animated.timing(targetAnim, {
-        toValue: 0.86,
-        duration: 70,
-        useNativeDriver: true,
-      }),
-      Animated.spring(targetAnim, {
-        toValue: 1,
-        speed: 22,
-        bounciness: 6,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    if (player) {
-      try {
-        player.seekBy(seconds);
-      } catch (e) {
-        console.warn('Erreur seekBy:', e);
-      }
-      resetHideTimer();
+      player.seekBy(seconds);
+    } catch (e) {
+      console.warn('Erreur seekBy:', e);
     }
+    resetHideTimer();
   };
 
-  // Toggle Fullscreen Landscape Mode (Custom UI)
   const toggleFullscreen = async () => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (_) {}
-
+    haptic(Haptics.ImpactFeedbackStyle.Medium);
     try {
       if (!isFullscreen) {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
@@ -499,31 +399,43 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     resetHideTimer();
   };
 
-  // Start Picture-in-Picture
   const handleStartPiP = async () => {
+    haptic(Haptics.ImpactFeedbackStyle.Light);
     try {
-      if (videoViewRef.current?.startPictureInPicture) {
-        await videoViewRef.current.startPictureInPicture();
-      }
+      await videoViewRef.current?.startPictureInPicture?.();
     } catch (e) {
-      console.warn('PiP non supporté sur ce device:', e);
+      console.warn('PiP non supporté:', e);
     }
+    resetHideTimer();
   };
 
-  // Cycle aspect ratio
   const toggleContentFit = () => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
+    haptic(Haptics.ImpactFeedbackStyle.Light);
     setContentFit(prev => (prev === 'contain' ? 'cover' : 'contain'));
     resetHideTimer();
   };
 
-  // Change playback speed
+  const openSettings = (tab?: SettingsTab) => {
+    haptic(Haptics.ImpactFeedbackStyle.Light);
+    if (tab) setActiveSettingsTab(tab);
+    setShowSettings(true);
+    sheetSlideAnim.setValue(380);
+    sheetFadeAnim.setValue(0);
+    Animated.parallel([
+      Animated.spring(sheetSlideAnim, { toValue: 0, speed: 18, bounciness: 4, useNativeDriver: true }),
+      Animated.timing(sheetFadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const closeSettings = () => {
+    Animated.parallel([
+      Animated.timing(sheetSlideAnim, { toValue: 380, duration: 180, useNativeDriver: true }),
+      Animated.timing(sheetFadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start(() => setShowSettings(false));
+  };
+
   const changeSpeed = (rate: number) => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
+    haptic(Haptics.ImpactFeedbackStyle.Light);
     if (player) {
       try {
         player.playbackRate = rate;
@@ -536,89 +448,75 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     resetHideTimer();
   };
 
-  // Change quality
-  const changeQuality = (qualityLabel: string) => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-    setSelectedQuality(qualityLabel);
+  const changeQuality = (label: string) => {
+    haptic(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedQuality(label);
     closeSettings();
     resetHideTimer();
   };
 
-  // Comparaison et sélection des pistes audio réelles
   const isCurrentAudioTrack = (track: AudioTrack) => {
     if (!audioTrack) return track.isDefault || false;
     if (track.id && audioTrack.id) return track.id === audioTrack.id;
-    const trackInfo = formatAudioTrackInfo(track);
-    const currInfo = formatAudioTrackInfo(audioTrack);
-    return trackInfo.title === currInfo.title;
+    return formatAudioTrackInfo(track).title === formatAudioTrackInfo(audioTrack).title;
   };
 
   const handleSelectAudioTrack = (track: AudioTrack) => {
+    haptic(Haptics.ImpactFeedbackStyle.Light);
+    if (!player) return;
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-    if (player) {
-      try {
-        player.audioTrack = track;
-      } catch (e) {
-        console.warn('Erreur sélection piste audio:', e);
-      }
+      player.audioTrack = track;
+    } catch (e) {
+      console.warn('Erreur piste audio:', e);
     }
   };
 
-  // Comparaison et sélection des sous-titres réels
   const isCurrentSubtitleTrack = (track: SubtitleTrack) => {
     if (!subtitleTrack) return false;
     if (track.id && subtitleTrack.id) return track.id === subtitleTrack.id;
-    const trackInfo = formatSubtitleTrackInfo(track);
-    const currInfo = formatSubtitleTrackInfo(subtitleTrack);
-    return trackInfo.title === currInfo.title;
+    return formatSubtitleTrackInfo(track).title === formatSubtitleTrackInfo(subtitleTrack).title;
   };
 
   const handleSelectSubtitleTrack = (track: SubtitleTrack | null) => {
+    haptic(Haptics.ImpactFeedbackStyle.Light);
+    if (!player) return;
     try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-    if (player) {
-      try {
-        player.subtitleTrack = track;
-      } catch (e) {
-        console.warn('Erreur sélection sous-titres:', e);
-      }
+      player.subtitleTrack = track;
+    } catch (e) {
+      console.warn('Erreur sous-titres:', e);
     }
   };
 
-  // Exit player and restore portrait orientation
   const handleExit = async () => {
     try {
       await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
     } catch (_) {}
-    if (player) {
-      try {
-        player.pause();
-      } catch (_) {}
-    }
+    try {
+      player?.pause();
+    } catch (_) {}
     onClose();
   };
 
+  // ── États dérivés ────────────────────────────────────────────────────────
   const duration = player?.duration ?? 0;
   const isError = ((status === 'error' && fallbackTried) || loadTimedOut) && !isRetrying;
-  const isLoading = ((status === 'loading' || (status === 'error' && !fallbackTried)) || isRetrying) && !loadTimedOut;
+  const isLoading =
+    ((status === 'loading' || (status === 'error' && !fallbackTried)) || isRetrying) && !loadTimedOut;
   const playerErrorMsg =
     (error as { message?: string } | null)?.message ??
-    (loadTimedOut ? 'Délai dépassé (30s) sans image. Réseau ou segments injoignables depuis l’iPhone.' : '');
+    (loadTimedOut ? 'Délai dépassé sans image. Vérifiez la connexion.' : '');
+  const live = isLive || player?.isLive;
+  const shownTime = isScrubbing ? scrubValue : currentTimeState;
 
-  const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+  const topPad = Math.max(insets.top, Platform.OS === 'ios' ? 44 : 20);
+  const bottomPad = Math.max(insets.bottom, Platform.OS === 'ios' ? 20 : 12);
 
   return (
     <View style={styles.container}>
-      <StatusBar hidden={isFullscreen || !controlsVisible} backgroundColor="#000000" />
+      <StatusBar hidden={isFullscreen || !controlsVisible} backgroundColor={THEME.colors.background} />
 
       <TouchableWithoutFeedback onPress={toggleControls}>
         <View style={styles.videoWrapper}>
-          {/* Native video engine without native controls (100% Custom Player UI) */}
           <VideoView
             ref={videoViewRef}
             player={player}
@@ -629,170 +527,113 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
             fullscreenOptions={{ enable: false }}
           />
 
-          {/* Loading Spinner */}
           {isLoading && (
-            <View style={styles.loadingOverlay}>
+            <View style={styles.stateOverlay}>
               <ActivityIndicator size="large" color={THEME.colors.primary} />
-              <Text style={styles.loadingText}>Chargement du flux HLS...</Text>
+              <Text style={styles.stateText}>Chargement…</Text>
             </View>
           )}
 
-          {/* Erreur player (remplace le spinner infini) */}
           {isError && (
-            <View style={styles.loadingOverlay}>
-              <Ionicons name="alert-circle-outline" size={42} color={THEME.colors.primaryRed} />
-              <Text style={[styles.loadingText, { marginTop: 10, textAlign: 'center', paddingHorizontal: 24 }]}>
-                Impossible de lire ce flux.{playerErrorMsg ? `\n${playerErrorMsg}` : ''}
-              </Text>
-              <TouchableOpacity
-                style={{ marginTop: 16, paddingHorizontal: 22, paddingVertical: 12, borderRadius: 10, backgroundColor: THEME.colors.primaryRed }}
-                onPress={handleRetry}
-                activeOpacity={0.85}
-              >
-                <Text style={{ color: '#09090F', fontFamily: THEME.fonts.extrabold, fontSize: 14 }}>Réessayer</Text>
+            <View style={styles.stateOverlay}>
+              <View style={styles.errorIcon}>
+                <Ionicons name="alert-circle-outline" size={30} color={THEME.colors.primary} />
+              </View>
+              <Text style={styles.errorTitle}>Lecture impossible</Text>
+              {!!playerErrorMsg && <Text style={styles.errorMsg} numberOfLines={3}>{playerErrorMsg}</Text>}
+              <TouchableOpacity style={styles.retryBtn} onPress={handleRetry} activeOpacity={0.85}>
+                <Ionicons name="refresh" size={16} color={THEME.colors.background} />
+                <Text style={styles.retryText}>Réessayer</Text>
               </TouchableOpacity>
             </View>
           )}
 
-          {/* Custom Player Controls Overlay avec fondu progressif */}
           <Animated.View
             style={[styles.controlsOverlay, { opacity: controlsOpacity }]}
             pointerEvents={controlsVisible ? 'auto' : 'none'}
           >
-            {/* Gradient Top */}
             <LinearGradient
-              colors={['rgba(7,9,14,0.96)', 'rgba(7,9,14,0.5)', 'transparent']}
-              style={[styles.topGradient, { height: Math.max(insets.top, 24) + 110 }]}
+              colors={['rgba(9,9,15,0.92)', 'rgba(9,9,15,0.45)', 'transparent']}
+              style={[styles.topGradient, { height: topPad + 96 }]}
+            />
+            <LinearGradient
+              colors={['transparent', 'rgba(9,9,15,0.5)', 'rgba(9,9,15,0.95)']}
+              style={[styles.bottomGradient, { height: bottomPad + 168 }]}
             />
 
-            {/* Gradient Bottom */}
-            <LinearGradient
-              colors={['transparent', 'rgba(7,9,14,0.55)', 'rgba(7,9,14,0.98)']}
-              style={[styles.bottomGradient, { height: Math.max(insets.bottom, 20) + 170 }]}
-            />
-
-            {/* Barre Supérieure */}
-            <View style={[styles.topBar, { paddingTop: Math.max(insets.top, Platform.OS === 'ios' ? 44 : 20) }]}>
-              <TouchableOpacity style={styles.iconBtn} onPress={handleExit} activeOpacity={0.8}>
-                <Ionicons name="chevron-down" size={24} color="#FFFFFF" />
+            {/* ── Barre haute ── */}
+            <Animated.View style={[styles.topBar, { paddingTop: topPad, transform: [{ translateY: topBarSlide }] }]}>
+              <TouchableOpacity style={styles.glassBtn} onPress={handleExit} activeOpacity={0.8}>
+                <Ionicons name="close" size={20} color={THEME.colors.textPrimary} />
               </TouchableOpacity>
 
-              <View style={styles.titleContainer}>
-                <Text style={styles.playerTitle} numberOfLines={1}>
-                  {title}
-                </Text>
-                {subtitle && (
-                  <Text style={styles.playerSubtitle} numberOfLines={1}>
-                    {subtitle}
+              <View style={styles.titleBox}>
+                <Text style={styles.title} numberOfLines={1}>{title}</Text>
+                {!!subtitle && (
+                  <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>
+                )}
+              </View>
+
+              {live ? (
+                <View style={styles.livePill}>
+                  <View style={styles.liveDot} />
+                  <Text style={styles.liveText}>DIRECT</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={styles.qualityPill} onPress={() => openSettings('quality')} activeOpacity={0.8}>
+                  <Text style={styles.qualityText}>
+                    {selectedQuality === 'Source' ? detectedResolution.badge : selectedQuality}
                   </Text>
-                )}
-              </View>
-
-              <View style={styles.topRightActions}>
-                {/* Badge LIVE ou HLS */}
-                {isLive || player?.isLive ? (
-                  <View style={styles.liveIndicator}>
-                    <View style={styles.liveDot} />
-                    <Text style={styles.liveIndicatorText}>DIRECT</Text>
-                  </View>
-                ) : (
-                  /* Sélecteur rapide de qualité */
-                  <TouchableOpacity
-                    style={styles.qualityPill}
-                    onPress={() => openSettings('quality')}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.qualityPillText}>
-                      {selectedQuality === 'Source' ? detectedResolution.badge : selectedQuality}
-                    </Text>
-                    <Ionicons name="chevron-down" size={12} color={THEME.colors.primaryRed} />
-                  </TouchableOpacity>
-                )}
-
-                {/* Bouton PiP */}
-                <TouchableOpacity style={styles.iconBtn} onPress={handleStartPiP} activeOpacity={0.8}>
-                  <Ionicons name="albums-outline" size={18} color="#FFFFFF" />
-                </TouchableOpacity>
-
-                {/* Bouton Options Générales (Qualité, Vitesse, Audio) */}
-                <TouchableOpacity
-                  style={styles.iconBtn}
-                  onPress={() => openSettings('speed')}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="options-outline" size={20} color="#FFFFFF" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Contrôles Centraux avec Rebond Élastique Tactile */}
-            <View style={styles.centerControls}>
-              {!isLive && (
-                <TouchableOpacity
-                  onPress={() => seekBy(-10)}
-                  activeOpacity={0.8}
-                >
-                  <Animated.View style={[styles.seekButton, { transform: [{ scale: seekBackScale }] }]}>
-                    <Ionicons name="play-back" size={24} color="#FFFFFF" />
-                    <Text style={styles.seekText}>-10s</Text>
-                  </Animated.View>
+                  <Ionicons name="chevron-down" size={12} color={THEME.colors.textMuted} />
                 </TouchableOpacity>
               )}
 
-              <TouchableOpacity
-                onPress={togglePlayPause}
-                activeOpacity={0.85}
-              >
-                <Animated.View style={[styles.playPauseBtn, { transform: [{ scale: playBtnScale }] }]}>
+              <TouchableOpacity style={styles.glassBtn} onPress={() => openSettings('quality')} activeOpacity={0.8}>
+                <Ionicons name="settings-outline" size={19} color={THEME.colors.textPrimary} />
+              </TouchableOpacity>
+            </Animated.View>
+
+            {/* ── Contrôles centraux ── */}
+            <View style={styles.centerControls}>
+              {!live && (
+                <TouchableOpacity style={styles.seekBtn} onPress={() => seekBy(-10)} activeOpacity={0.8}>
+                  <Ionicons name="play-back" size={22} color={THEME.colors.textPrimary} />
+                  <Text style={styles.seekLabel}>10s</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={togglePlayPause} activeOpacity={0.85}>
+                <Animated.View style={[styles.playBtn, { transform: [{ scale: playBtnScale }] }]}>
                   <Ionicons
                     name={isPlaying ? 'pause' : 'play'}
-                    size={36}
-                    color="#09090F"
+                    size={34}
+                    color={THEME.colors.background}
                     style={!isPlaying ? { marginLeft: 4 } : undefined}
                   />
                 </Animated.View>
               </TouchableOpacity>
-
-              {!isLive && (
-                <TouchableOpacity
-                  onPress={() => seekBy(10)}
-                  activeOpacity={0.8}
-                >
-                  <Animated.View style={[styles.seekButton, { transform: [{ scale: seekFwdScale }] }]}>
-                    <Ionicons name="play-forward" size={24} color="#FFFFFF" />
-                    <Text style={styles.seekText}>+10s</Text>
-                  </Animated.View>
+              {!live && (
+                <TouchableOpacity style={styles.seekBtn} onPress={() => seekBy(10)} activeOpacity={0.8}>
+                  <Ionicons name="play-forward" size={22} color={THEME.colors.textPrimary} />
+                  <Text style={styles.seekLabel}>10s</Text>
                 </TouchableOpacity>
               )}
             </View>
 
-            {/* Barre Inférieure */}
-            <View
-              style={[
-                styles.bottomBar,
-                {
-                  paddingBottom: Math.max(insets.bottom, Platform.OS === 'ios' ? 20 : 12),
-                  paddingHorizontal: Math.max(insets.left, insets.right, 16),
-                },
-              ]}
-            >
-              {/* Scrubber / Slider (si VOD) */}
-              {!isLive && duration > 0 && (
-                <View style={styles.scrubberRow}>
-                  <Text style={styles.timeText}>
-                    {formatTime(isScrubbing ? scrubValue : currentTimeState)}
-                  </Text>
-
+            {/* ── Barre basse ── */}
+            <Animated.View style={[styles.bottomBar, { paddingBottom: bottomPad, transform: [{ translateY: bottomBarSlide }] }]}>
+              {!live && duration > 0 && (
+                <View style={styles.scrubRow}>
+                  <Text style={styles.timeText}>{formatTime(shownTime)}</Text>
                   <Slider
                     style={styles.slider}
                     minimumValue={0}
                     maximumValue={duration}
-                    value={isScrubbing ? scrubValue : currentTimeState}
-                    onValueChange={(val) => {
+                    value={shownTime}
+                    onValueChange={val => {
                       setIsScrubbing(true);
                       setScrubValue(val);
                     }}
-                    onSlidingComplete={(val) => {
+                    onSlidingComplete={val => {
                       setIsScrubbing(false);
                       if (player) {
                         try {
@@ -803,400 +644,211 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                       }
                       resetHideTimer();
                     }}
-                    minimumTrackTintColor={THEME.colors.primaryRed}
-                    maximumTrackTintColor="rgba(255, 255, 255, 0.22)"
-                    thumbTintColor={THEME.colors.primaryRed}
+                    minimumTrackTintColor={THEME.colors.primary}
+                    maximumTrackTintColor="rgba(255,255,255,0.22)"
+                    thumbTintColor={THEME.colors.primary}
                   />
-
-                  <Text style={styles.timeText}>
-                    {formatTime(duration)}
-                  </Text>
+                  <Text style={styles.timeText}>{formatTime(duration)}</Text>
                 </View>
               )}
 
-              {/* Actions inférieures épurées style Netflix / Apple TV */}
-              <View style={styles.bottomActionsRow}>
-                {/* Pilule Temps Écoulé / Total */}
-                <View style={styles.timePill}>
-                  <Text style={styles.timePillText}>
-                    {formatTime(isScrubbing ? scrubValue : currentTimeState)}
-                    <Text style={styles.timePillMuted}> / {formatTime(duration)}</Text>
-                  </Text>
-                </View>
-
+              <View style={styles.actionsRow}>
+                <TouchableOpacity style={styles.glassBtnSm} onPress={() => openSettings('audio')} activeOpacity={0.8}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={17} color={THEME.colors.textPrimary} />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.speedPill} onPress={() => openSettings('speed')} activeOpacity={0.8}>
+                  <Text style={styles.speedText}>{playbackSpeed}x</Text>
+                </TouchableOpacity>
                 <View style={{ flex: 1 }} />
-
-                {/* Bouton Pistes Audio & Sous-Titres */}
-                <TouchableOpacity
-                  style={styles.iconBtn}
-                  onPress={() => openSettings('audio')}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="chatbubble-ellipses-outline" size={18} color="#FFFFFF" />
-                </TouchableOpacity>
-
-                {/* Bouton Vitesse */}
-                <TouchableOpacity
-                  style={styles.speedPillBtn}
-                  onPress={() => openSettings('speed')}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="speedometer-outline" size={13} color={THEME.colors.primaryRed} style={{ marginRight: 4 }} />
-                  <Text style={styles.speedPillText}>{playbackSpeed}x</Text>
-                </TouchableOpacity>
-
-                {/* Format d'écran (Ajusté / Rempli) */}
-                <TouchableOpacity
-                  style={styles.iconBtn}
-                  onPress={toggleContentFit}
-                  activeOpacity={0.8}
-                >
+                <TouchableOpacity style={styles.glassBtnSm} onPress={toggleContentFit} activeOpacity={0.8}>
                   <Ionicons
-                    name={contentFit === 'contain' ? "scan-outline" : "crop-outline"}
-                    size={18}
-                    color="#FFFFFF"
+                    name={contentFit === 'contain' ? 'scan-outline' : 'crop-outline'}
+                    size={17}
+                    color={THEME.colors.textPrimary}
                   />
                 </TouchableOpacity>
-
-                {/* Bascule Plein Écran Paysage */}
-                <TouchableOpacity
-                  style={[styles.iconBtn, isFullscreen && styles.iconBtnActive]}
-                  onPress={toggleFullscreen}
-                  activeOpacity={0.8}
-                >
+                <TouchableOpacity style={styles.glassBtnSm} onPress={toggleFullscreen} activeOpacity={0.8}>
                   <Ionicons
-                    name={isFullscreen ? 'contract' : 'expand'}
-                    size={18}
-                    color="#FFFFFF"
+                    name={isFullscreen ? 'contract-outline' : 'expand-outline'}
+                    size={17}
+                    color={THEME.colors.textPrimary}
                   />
                 </TouchableOpacity>
               </View>
-            </View>
+            </Animated.View>
+
+            {/* ── Flash central play / pause / seek ── */}
+            {flash && (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.flash,
+                  { opacity: flashOpacity, transform: [{ scale: flashScale }] },
+                ]}
+              >
+                <View style={styles.flashSeek}>
+                  <Ionicons
+                    name={flash.kind === 'back' ? 'play-back' : 'play-forward'}
+                    size={24}
+                    color={THEME.colors.textPrimary}
+                  />
+                  <Text style={styles.flashSeekText}>
+                    {flash.kind === 'back' ? '−10 s' : '+10 s'}
+                  </Text>
+                </View>
+              </Animated.View>
+            )}
           </Animated.View>
         </View>
       </TouchableWithoutFeedback>
 
-      {/* Panneau Réglages Custom (Qualité, Vitesse, Audio) - Overlay animé */}
+      {/* ── Bottom sheet réglages ── */}
       {showSettings && (
-        <Animated.View style={[styles.settingsOverlay, { opacity: sheetFadeAnim }]}>
-          <TouchableOpacity
-            style={styles.settingsBackdrop}
-            activeOpacity={1}
-            onPress={closeSettings}
-          />
+        <Animated.View style={[styles.sheetOverlay, { opacity: sheetFadeAnim }]}>
+          <TouchableOpacity style={styles.sheetBackdrop} activeOpacity={1} onPress={closeSettings} />
           <Animated.View
             style={[
-              styles.settingsSheet,
-              {
-                transform: [{ translateY: sheetSlideAnim }],
-                paddingBottom: Math.max(insets.bottom + 16, Platform.OS === 'ios' ? 36 : 22),
-              },
+              styles.sheet,
+              { transform: [{ translateY: sheetSlideAnim }], paddingBottom: Math.max(insets.bottom + 16, 24) },
             ]}
           >
-            {/* Header de la feuille de paramètres */}
-            <View style={styles.settingsSheetHeader}>
-              <View style={styles.settingsSheetTitleRow}>
-                <Ionicons name="settings" size={20} color={THEME.colors.primaryRed} />
-                <Text style={styles.settingsTitle}>Réglages du Lecteur Custom</Text>
-              </View>
-              <TouchableOpacity onPress={closeSettings} style={styles.settingsCloseBtn} activeOpacity={0.8}>
-                <Ionicons name="close" size={22} color="#FFFFFF" />
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>Réglages</Text>
+              <TouchableOpacity style={styles.sheetClose} onPress={closeSettings} activeOpacity={0.8}>
+                <Ionicons name="close" size={18} color={THEME.colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
-            {/* Onglets dans la modale */}
-            <View style={styles.modalTabsRow}>
-              <TouchableOpacity
-                style={[styles.modalTab, activeSettingsTab === 'quality' && styles.modalTabActive]}
-                onPress={() => setActiveSettingsTab('quality')}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.modalTabText, activeSettingsTab === 'quality' && styles.modalTabTextActive]}>
-                  Qualité Vidéo
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalTab, activeSettingsTab === 'speed' && styles.modalTabActive]}
-                onPress={() => setActiveSettingsTab('speed')}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.modalTabText, activeSettingsTab === 'speed' && styles.modalTabTextActive]}>
-                  Vitesse ({playbackSpeed}x)
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalTab, activeSettingsTab === 'audio' && styles.modalTabActive]}
-                onPress={() => setActiveSettingsTab('audio')}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.modalTabText, activeSettingsTab === 'audio' && styles.modalTabTextActive]}>
-                  Audio & Langues
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
-              {/* Onglet QUALITÉ VIDÉO */}
-              {activeSettingsTab === 'quality' && (
-                <View style={styles.sectionContainer}>
-                  <Text style={styles.sectionHelpText}>
-                    Qualité et résolution du flux :
-                  </Text>
-
-                  {/* Option 1: Qualité Source Native Détectée */}
+            <View style={styles.segmented}>
+              {SETTINGS_TABS.map(tab => {
+                const active = activeSettingsTab === tab.id;
+                const label = tab.id === 'speed' ? `Vitesse · ${playbackSpeed}x` : tab.label;
+                return (
                   <TouchableOpacity
-                    style={[styles.optionRow, selectedQuality === 'Source' && styles.optionRowSelected]}
-                    onPress={() => changeQuality('Source')}
-                    activeOpacity={0.8}
+                    key={tab.id}
+                    style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+                    onPress={() => {
+                      haptic(Haptics.ImpactFeedbackStyle.Light);
+                      setActiveSettingsTab(tab.id);
+                    }}
+                    activeOpacity={0.7}
                   >
-                    <View style={styles.optionLeft}>
-                      <Ionicons
-                        name={selectedQuality === 'Source' ? "checkmark-circle" : "ellipse-outline"}
-                        size={20}
-                        color={selectedQuality === 'Source' ? THEME.colors.primary : THEME.colors.textMuted}
-                      />
-                      <View style={{ marginLeft: 8 }}>
-                        <Text style={[styles.optionText, selectedQuality === 'Source' && styles.optionTextSelected]}>
-                          {detectedResolution.label} (Source native)
-                        </Text>
-                        <Text style={styles.trackSubtext}>
-                          Résolution master {detectedResolution.resolution} • Image optimale non compressée
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={[styles.optBadge, selectedQuality === 'Source' && styles.optBadgeSelected]}>
-                      <Text style={[styles.optBadgeText, selectedQuality === 'Source' && styles.optBadgeTextSelected]}>
-                        {detectedResolution.badge}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* Option 2: Auto / Adaptatif HLS */}
-                  <TouchableOpacity
-                    style={[styles.optionRow, selectedQuality === 'Auto' && styles.optionRowSelected]}
-                    onPress={() => changeQuality('Auto')}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.optionLeft}>
-                      <Ionicons
-                        name={selectedQuality === 'Auto' ? "checkmark-circle" : "ellipse-outline"}
-                        size={20}
-                        color={selectedQuality === 'Auto' ? THEME.colors.primary : THEME.colors.textMuted}
-                      />
-                      <View style={{ marginLeft: 8 }}>
-                        <Text style={[styles.optionText, selectedQuality === 'Auto' && styles.optionTextSelected]}>
-                          Auto (Adaptatif HLS)
-                        </Text>
-                        <Text style={styles.trackSubtext}>
-                          Ajuste automatiquement le débit selon votre connexion (Wi-Fi / 4G / 5G)
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={[styles.optBadge, selectedQuality === 'Auto' && styles.optBadgeSelected]}>
-                      <Text style={[styles.optBadgeText, selectedQuality === 'Auto' && styles.optBadgeTextSelected]}>
-                        AUTO
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* Option 3: Mode de cadrage d'écran */}
-                  <Text style={[styles.sectionHelpText, { marginTop: 14 }]}>
-                    Format d'affichage de l'image :
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.optionRow}
-                    onPress={toggleContentFit}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.optionLeft}>
-                      <Ionicons
-                        name={contentFit === 'cover' ? "scan-outline" : "crop-outline"}
-                        size={20}
-                        color={THEME.colors.primary}
-                      />
-                      <View style={{ marginLeft: 8 }}>
-                        <Text style={styles.optionText}>
-                          {contentFit === 'contain' ? 'Format Cinéma (Original avec bandes)' : 'Plein Écran Zoomé (Sans bandes noires)'}
-                        </Text>
-                        <Text style={styles.trackSubtext}>
-                          Appuyez pour basculer entre le format d'origine et le plein écran
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={[styles.optBadge, styles.optBadgeSelected]}>
-                      <Text style={[styles.optBadgeText, styles.optBadgeTextSelected]}>
-                        {contentFit === 'contain' ? 'CINÉMA' : 'ZOOM'}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  {/* Note explicative transparente */}
-                  <View style={styles.emptyTrackBox}>
-                    <Ionicons name="information-circle-outline" size={18} color={THEME.colors.primary} />
-                    <Text style={styles.emptyTrackText}>
-                      Ce flux est diffusé par le serveur dans sa résolution maximale ({detectedResolution.label}). Le protocole HLS stabilise automatiquement la diffusion pour vous garantir la meilleure qualité sans interruption.
+                    <Text style={[styles.segmentText, active && styles.segmentTextActive]} numberOfLines={1}>
+                      {label}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Animated.View style={{ opacity: tabFade, flexShrink: 1 }}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
+              {activeSettingsTab === 'quality' && (
+                <View style={styles.section}>
+                  <OptionRow
+                    index={0}
+                    selected={selectedQuality === 'Source'}
+                    title={`${detectedResolution.label} · Source`}
+                    description={detectedResolution.detail}
+                    badge={detectedResolution.badge}
+                    onPress={() => changeQuality('Source')}
+                  />
+                  <OptionRow
+                    index={1}
+                    selected={selectedQuality === 'Auto'}
+                    title="Auto · Adaptatif"
+                    description="Ajuste le débit selon la connexion"
+                    badge="AUTO"
+                    onPress={() => changeQuality('Auto')}
+                  />
+                  <Text style={styles.sectionLabel}>Affichage</Text>
+                  <OptionRow
+                    index={2}
+                    selected={false}
+                    title={contentFit === 'contain' ? 'Format cinéma' : 'Plein écran zoomé'}
+                    description="Basculer entre bandes noires et remplissage"
+                    badge={contentFit === 'contain' ? 'CINÉ' : 'ZOOM'}
+                    onPress={toggleContentFit}
+                  />
+                  <OptionRow
+                    index={3}
+                    selected={false}
+                    title="Image dans l'image"
+                    description="Continuer en fenêtre flottante"
+                    badge="PIP"
+                    onPress={handleStartPiP}
+                  />
                 </View>
               )}
 
-              {/* Onglet VITESSE DE LECTURE */}
               {activeSettingsTab === 'speed' && (
-                <View style={styles.sectionContainer}>
-                  <Text style={styles.sectionHelpText}>
-                    Ajustez la vitesse de défilement de la vidéo :
-                  </Text>
-                  <View style={styles.speedGrid}>
-                    {SPEED_OPTIONS.map(s => {
-                      const isSelected = playbackSpeed === s;
-                      return (
-                        <TouchableOpacity
-                          key={s}
-                          style={[styles.speedCard, isSelected && styles.speedCardSelected]}
-                          onPress={() => changeSpeed(s)}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={[styles.speedCardText, isSelected && styles.speedCardTextSelected]}>
-                            {s === 1.0 ? '1.0x (Normal)' : `${s}x`}
-                          </Text>
-                          {isSelected && (
-                            <Ionicons name="checkmark" size={16} color="#080B10" style={{ marginTop: 2 }} />
-                          )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                <View style={styles.speedGrid}>
+                  {SPEED_OPTIONS.map((s, i) => (
+                    <SpeedCard
+                      key={s}
+                      index={i}
+                      selected={playbackSpeed === s}
+                      label={s === 1 ? '1x · Normal' : `${s}x`}
+                      onPress={() => changeSpeed(s)}
+                    />
+                  ))}
                 </View>
               )}
 
-              {/* Onglet AUDIO & SOUS-TITRES (Flux HLS Réel) */}
               {activeSettingsTab === 'audio' && (
-                <View style={styles.sectionContainer}>
-                  <Text style={styles.sectionHelpText}>
-                    Pistes audio disponibles ({uniqueAudioTracks.length}) :
-                  </Text>
-
-                  {uniqueAudioTracks && uniqueAudioTracks.length > 0 ? (
-                    uniqueAudioTracks.map((track: AudioTrack, idx: number) => {
-                      const isSelected = isCurrentAudioTrack(track);
+                <View style={styles.section}>
+                  <Text style={styles.sectionLabel}>Pistes audio ({uniqueAudioTracks.length})</Text>
+                  {uniqueAudioTracks.length > 0 ? (
+                    uniqueAudioTracks.map((track, idx) => {
                       const info = formatAudioTrackInfo(track);
                       return (
-                        <TouchableOpacity
+                        <OptionRow
                           key={track.id || `${track.language}-${idx}`}
-                          style={[styles.optionRow, isSelected && styles.optionRowSelected]}
+                          index={idx}
+                          selected={isCurrentAudioTrack(track)}
+                          title={info.title}
+                          description={`${info.description}${track.isDefault ? ' · Défaut' : ''}`}
+                          badge={info.badge}
                           onPress={() => handleSelectAudioTrack(track)}
-                          activeOpacity={0.8}
-                        >
-                          <View style={styles.optionLeft}>
-                            <Ionicons
-                              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
-                              size={20}
-                              color={isSelected ? THEME.colors.primary : THEME.colors.textMuted}
-                            />
-                            <View style={{ marginLeft: 8 }}>
-                              <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>
-                                {info.title}
-                              </Text>
-                              <Text style={styles.trackSubtext}>
-                                {info.description} {track.isDefault ? '• Par défaut' : ''}
-                              </Text>
-                            </View>
-                          </View>
-                          <View style={[styles.optBadge, isSelected && styles.optBadgeSelected]}>
-                            <Text style={[styles.optBadgeText, isSelected && styles.optBadgeTextSelected]}>
-                              {info.badge}
-                            </Text>
-                          </View>
-                        </TouchableOpacity>
+                        />
                       );
                     })
                   ) : (
-                    <View style={styles.emptyTrackBox}>
-                      <Ionicons name="information-circle-outline" size={18} color={THEME.colors.primary} />
-                      <Text style={styles.emptyTrackText}>
-                        Piste audio principale active. Ce flux ne contient pas de piste audio secondaire alternative.
-                      </Text>
+                    <View style={styles.emptyBox}>
+                      <Text style={styles.emptyText}>Piste audio principale active.</Text>
                     </View>
                   )}
 
-                  <Text style={[styles.sectionHelpText, { marginTop: 22 }]}>
-                    Sous-titres disponibles ({uniqueSubtitleTracks.length}) :
+                  <Text style={[styles.sectionLabel, { marginTop: THEME.spacing.lg }]}>
+                    Sous-titres ({uniqueSubtitleTracks.length})
                   </Text>
-
-                  {/* Option Désactiver les sous-titres */}
-                  <TouchableOpacity
-                    style={[styles.optionRow, subtitleTrack === null && styles.optionRowSelected]}
+                  <OptionRow
+                    index={0}
+                    selected={subtitleTrack === null}
+                    title="Désactivés"
+                    description="Aucun sous-titre affiché"
+                    badge="OFF"
                     onPress={() => handleSelectSubtitleTrack(null)}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.optionLeft}>
-                      <Ionicons
-                        name={subtitleTrack === null ? "checkmark-circle" : "ellipse-outline"}
-                        size={20}
-                        color={subtitleTrack === null ? THEME.colors.primary : THEME.colors.textMuted}
+                  />
+                  {uniqueSubtitleTracks.map((track, idx) => {
+                    const info = formatSubtitleTrackInfo(track);
+                    return (
+                      <OptionRow
+                        key={track.id || `${track.language}-${idx}`}
+                        index={idx + 1}
+                        selected={isCurrentSubtitleTrack(track)}
+                        title={info.title}
+                        description={info.description}
+                        badge={info.badge}
+                        onPress={() => handleSelectSubtitleTrack(track)}
                       />
-                      <View style={{ marginLeft: 8 }}>
-                        <Text style={[styles.optionText, subtitleTrack === null && styles.optionTextSelected]}>
-                          Désactivés
-                        </Text>
-                        <Text style={styles.trackSubtext}>Aucun sous-titre affiché à l'écran</Text>
-                      </View>
-                    </View>
-                    {subtitleTrack === null && (
-                      <View style={styles.activeBadge}>
-                        <Text style={styles.activeBadgeText}>OFF</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-
-                  {/* Liste des vraies pistes de sous-titres dédupliquées */}
-                  {uniqueSubtitleTracks && uniqueSubtitleTracks.length > 0 ? (
-                    uniqueSubtitleTracks.map((track: SubtitleTrack, idx: number) => {
-                      const isSelected = isCurrentSubtitleTrack(track);
-                      const info = formatSubtitleTrackInfo(track);
-                      return (
-                        <TouchableOpacity
-                          key={track.id || `${track.language}-${idx}`}
-                          style={[styles.optionRow, isSelected && styles.optionRowSelected]}
-                          onPress={() => handleSelectSubtitleTrack(track)}
-                          activeOpacity={0.8}
-                        >
-                          <View style={styles.optionLeft}>
-                            <Ionicons
-                              name={isSelected ? "checkmark-circle" : "ellipse-outline"}
-                              size={20}
-                              color={isSelected ? THEME.colors.primary : THEME.colors.textMuted}
-                            />
-                            <View style={{ marginLeft: 8 }}>
-                              <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>
-                                {info.title}
-                              </Text>
-                              <Text style={styles.trackSubtext}>
-                                {info.description}
-                              </Text>
-                            </View>
-                          </View>
-                          <View style={[styles.optBadge, isSelected && styles.optBadgeSelected]}>
-                            <Text style={[styles.optBadgeText, isSelected && styles.optBadgeTextSelected]}>
-                              {info.badge}
-                            </Text>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })
-                  ) : (
-                    <View style={styles.emptyTrackBox}>
-                      <Ionicons name="information-circle-outline" size={18} color={THEME.colors.textMuted} />
-                      <Text style={styles.emptyTrackText}>
-                        Aucun sous-titre embarqué dans ce flux vidéo.
-                      </Text>
-                    </View>
-                  )}
+                    );
+                  })}
                 </View>
               )}
             </ScrollView>
+            </Animated.View>
           </Animated.View>
         </Animated.View>
       )}
@@ -1204,44 +856,170 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   );
 };
 
+/** Entrée en cascade : fondu + glissé avec délai selon l'index. */
+function useStagger(index: number) {
+  const anim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    anim.setValue(0);
+    Animated.timing(anim, {
+      toValue: 1,
+      duration: 220,
+      delay: Math.min(Math.max(index, 0), 12) * 35,
+      useNativeDriver: true,
+    }).start();
+  }, [anim, index]);
+  return {
+    opacity: anim,
+    transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }],
+  };
+}
+
+/** Ligne d'option carte — même langage que le reste de l'app (card, squircle, badge). */
+const OptionRow = ({
+  index = 0,
+  selected,
+  title,
+  description,
+  badge,
+  onPress,
+}: {
+  index?: number;
+  selected: boolean;
+  title: string;
+  description: string;
+  badge: string;
+  onPress: () => void;
+}) => {
+  const staggerStyle = useStagger(index);
+  return (
+  <Animated.View style={staggerStyle}>
+  <TouchableOpacity
+    style={[styles.optionRow, selected && styles.optionRowSelected]}
+    onPress={onPress}
+    activeOpacity={0.8}
+  >
+    <View style={styles.optionLeft}>
+      <Ionicons
+        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+        size={20}
+        color={selected ? THEME.colors.primary : THEME.colors.textMuted}
+      />
+      <View style={styles.optionTexts}>
+        <Text style={[styles.optionTitle, selected && styles.optionTitleSelected]} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={styles.optionDesc} numberOfLines={2}>{description}</Text>
+      </View>
+    </View>
+    <View style={[styles.badge, selected && styles.badgeSelected]}>
+      <Text style={[styles.badgeText, selected && styles.badgeTextSelected]}>{badge}</Text>
+    </View>
+  </TouchableOpacity>
+  </Animated.View>
+  );
+};
+
+/** Carte de vitesse avec entrée en cascade. */
+const SpeedCard = ({
+  index,
+  selected,
+  label,
+  onPress,
+}: {
+  index: number;
+  selected: boolean;
+  label: string;
+  onPress: () => void;
+}) => {
+  const staggerStyle = useStagger(index);
+  return (
+    <Animated.View style={[{ width: '31%' }, staggerStyle]}>
+      <TouchableOpacity
+        style={[styles.speedCard, { width: '100%' }, selected && styles.speedCardSelected]}
+        onPress={onPress}
+        activeOpacity={0.8}
+      >
+        <Text style={[styles.speedCardText, selected && styles.speedCardTextSelected]}>
+          {label}
+        </Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: THEME.colors.background,
   },
   videoWrapper: {
     flex: 1,
     position: 'relative',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#000000',
+    backgroundColor: THEME.colors.background,
   },
   video: {
     width: '100%',
     height: '100%',
   },
-  loadingOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(8, 10, 14, 0.75)',
+
+  // ── États chargement / erreur ──
+  stateOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: THEME.colors.overlay,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    paddingHorizontal: THEME.spacing.hero,
   },
-  loadingText: {
+  stateText: {
+    marginTop: THEME.spacing.sm,
     color: THEME.colors.textSecondary,
-    fontSize: 13,
+    fontSize: THEME.typography.sizes.caption,
     fontFamily: THEME.fonts.semibold,
   },
+  errorIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: THEME.colors.surfaceActive,
+    borderWidth: 1,
+    borderColor: THEME.colors.borderSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: THEME.spacing.md,
+  },
+  errorTitle: {
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.h3,
+    fontFamily: THEME.fonts.extrabold,
+  },
+  errorMsg: {
+    marginTop: THEME.spacing.sm,
+    color: THEME.colors.textMuted,
+    fontSize: THEME.typography.sizes.caption,
+    fontFamily: THEME.fonts.medium,
+    textAlign: 'center',
+  },
+  retryBtn: {
+    marginTop: THEME.spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: THEME.colors.primary,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: THEME.radii.full,
+  },
+  retryText: {
+    color: THEME.colors.background,
+    fontSize: THEME.typography.sizes.label,
+    fontFamily: THEME.fonts.extrabold,
+  },
+
+  // ── Overlay contrôles ──
   controlsOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'space-between',
   },
   topGradient: {
@@ -1249,324 +1027,353 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: 140,
   },
   bottomGradient: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: 200,
   },
+
+  // ── Barre haute ──
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: THEME.spacing.lg,
     zIndex: 10,
-    paddingTop: Platform.OS === 'ios' ? 50 : 24,
-    paddingHorizontal: 16,
   },
-  titleContainer: {
+  titleBox: {
     flex: 1,
-    marginHorizontal: 12,
   },
-  playerTitle: {
-    fontSize: 16,
-    fontFamily: THEME.fonts.extrabold,
+  title: {
     color: THEME.colors.textPrimary,
-    letterSpacing: -0.3,
+    fontSize: THEME.typography.sizes.h3,
+    fontFamily: THEME.fonts.extrabold,
+    letterSpacing: THEME.typography.letterSpacing.tight,
   },
-  playerSubtitle: {
-    fontSize: 12,
-    color: THEME.colors.primaryRed,
+  subtitle: {
     marginTop: 2,
+    color: THEME.colors.textMuted,
+    fontSize: THEME.typography.sizes.small,
     fontFamily: THEME.fonts.semibold,
   },
-  topRightActions: {
-    flexDirection: 'row',
+  glassBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
   },
-  liveIndicator: {
+  glassBtnSm: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  livePill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: THEME.colors.primaryRed,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+    gap: 6,
+    backgroundColor: THEME.colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: THEME.radii.full,
   },
   liveDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#FFFFFF',
-    marginRight: 5,
+    backgroundColor: THEME.colors.matchGreen,
   },
-  liveIndicatorText: {
-    fontSize: 9,
+  liveText: {
+    color: THEME.colors.background,
+    fontSize: THEME.typography.sizes.badge,
     fontFamily: THEME.fonts.extrabold,
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
+    letterSpacing: THEME.typography.letterSpacing.wide,
   },
   qualityPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: THEME.radii.full,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
-  qualityPillText: {
-    fontSize: 11,
+  qualityText: {
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.small,
     fontFamily: THEME.fonts.extrabold,
-    color: THEME.colors.primaryRed,
-    letterSpacing: 0.3,
+    letterSpacing: THEME.typography.letterSpacing.wide,
   },
-  iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(25, 28, 36, 0.85)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-  },
-  iconBtnActive: {
-    backgroundColor: 'rgba(255, 255, 255, 0.14)',
-    borderColor: THEME.colors.primaryRed,
-  },
+
+  // ── Centre ──
   centerControls: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 34,
+    gap: 28,
     zIndex: 10,
   },
-  seekButton: {
+  seekBtn: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(25, 28, 36, 0.88)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.14)',
   },
-  seekText: {
-    fontSize: 10,
+  seekLabel: {
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.badge,
     fontFamily: THEME.fonts.extrabold,
-    color: '#FFFFFF',
-    marginTop: 2,
+    marginTop: 1,
   },
-  playPauseBtn: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: THEME.colors.primaryRed,
+  playBtn: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    backgroundColor: THEME.colors.primary,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 12,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
+  flash: {
+    position: 'absolute',
+    alignSelf: 'center',
+    top: '38%',
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 20,
+  },
+  flashSeek: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  flashSeekText: {
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.small,
+    fontFamily: THEME.fonts.extrabold,
+  },
+
+  // ── Bas ──
   bottomBar: {
+    paddingHorizontal: THEME.spacing.lg,
     zIndex: 10,
-    paddingHorizontal: 16,
-    paddingBottom: Platform.OS === 'ios' ? 30 : 12,
   },
-  scrubberRow: {
+  scrubRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: THEME.spacing.sm,
   },
   slider: {
     flex: 1,
-    height: 40,
-    marginHorizontal: 8,
+    height: 36,
+    marginHorizontal: THEME.spacing.sm,
   },
   timeText: {
-    fontSize: 12,
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.small,
     fontFamily: THEME.fonts.bold,
-    color: '#FFFFFF',
-    minWidth: 42,
+    minWidth: 44,
     textAlign: 'center',
   },
-  bottomActionsRow: {
+  actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  timePill: {
-    backgroundColor: 'rgba(25, 28, 36, 0.75)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-  },
-  timePillText: {
-    fontSize: 12,
-    fontFamily: THEME.fonts.bold,
-    color: '#FFFFFF',
-  },
-  timePillMuted: {
-    color: THEME.colors.textMuted,
-    fontFamily: THEME.fonts.medium,
-  },
-  speedPillBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 40,
+  speedPill: {
+    height: 38,
+    minWidth: 56,
     paddingHorizontal: 12,
-    borderRadius: 20,
-    backgroundColor: 'rgba(25, 28, 36, 0.85)',
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.10)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  speedPillText: {
-    fontSize: 12,
+  speedText: {
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.small,
     fontFamily: THEME.fonts.extrabold,
-    color: '#FFFFFF',
   },
-  settingsOverlay: {
+
+  // ── Bottom sheet ──
+  sheetOverlay: {
     ...StyleSheet.absoluteFill,
     zIndex: 100,
     justifyContent: 'flex-end',
   },
-  settingsBackdrop: {
+  sheetBackdrop: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0, 0, 0, 0.78)',
+    backgroundColor: THEME.colors.overlayDark,
   },
-  settingsSheet: {
-    backgroundColor: '#11141D',
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
-    paddingTop: 22,
-    paddingHorizontal: 22,
-    paddingBottom: Platform.OS === 'ios' ? 36 : 22,
-    maxHeight: '80%',
-    borderTopWidth: 1.5,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -10 },
-    shadowOpacity: 0.6,
-    shadowRadius: 24,
-    elevation: 20,
+  sheet: {
+    backgroundColor: 'rgba(19,23,32,0.94)',
+    borderTopLeftRadius: THEME.radii.xl,
+    borderTopRightRadius: THEME.radii.xl,
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    paddingHorizontal: THEME.spacing.screen,
+    paddingTop: THEME.spacing.sm,
+    maxHeight: '78%',
   },
-  settingsSheetHeader: {
+  sheetHandle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: THEME.colors.surfaceActive,
+    marginBottom: THEME.spacing.md,
+  },
+  sheetHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: THEME.spacing.md,
   },
-  settingsSheetTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  settingsTitle: {
-    fontSize: 16,
+  sheetTitle: {
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.h3,
     fontFamily: THEME.fonts.extrabold,
-    color: '#FFFFFF',
+    letterSpacing: THEME.typography.letterSpacing.tight,
   },
-  settingsCloseBtn: {
+  sheetClose: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: THEME.colors.surfaceActive,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalTabsRow: {
+  segmented: {
+    position: 'relative',
     flexDirection: 'row',
-    backgroundColor: '#191C24',
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 18,
+    backgroundColor: THEME.colors.searchBar,
+    borderRadius: THEME.radii.full,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: THEME.colors.searchBorder,
+    padding: 4,
+    marginBottom: THEME.spacing.md,
   },
-  modalTab: {
+  segmentBtn: {
     flex: 1,
-    paddingVertical: 9,
     alignItems: 'center',
-    borderRadius: 10,
+    paddingVertical: 9,
+    borderRadius: THEME.radii.full,
   },
-  modalTabActive: {
-    backgroundColor: THEME.colors.primaryRed,
+  segmentBtnActive: {
+    backgroundColor: THEME.colors.surfaceActive,
+    borderWidth: 1,
+    borderColor: THEME.colors.borderSubtle,
   },
-  modalTabText: {
-    fontSize: 12,
-    fontFamily: THEME.fonts.semibold,
+  segmentText: {
     color: THEME.colors.textMuted,
+    fontSize: THEME.typography.sizes.small,
+    fontFamily: THEME.fonts.semibold,
   },
-  modalTabTextActive: {
-    color: '#09090F',
-    fontFamily: THEME.fonts.extrabold,
+  segmentTextActive: {
+    color: THEME.colors.textPrimary,
+    fontFamily: THEME.fonts.bold,
   },
   sheetScroll: {
-    paddingBottom: 20,
+    paddingBottom: THEME.spacing.lg,
   },
-  sectionContainer: {
+  section: {
     gap: 8,
   },
-  sectionHelpText: {
-    fontSize: 12,
+  sectionLabel: {
     color: THEME.colors.textMuted,
-    marginBottom: 6,
+    fontSize: THEME.typography.sizes.small,
     fontFamily: THEME.fonts.semibold,
+    marginBottom: 2,
+    marginTop: 4,
   },
+
+  // ── Options ──
   optionRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: THEME.colors.card,
+    borderWidth: 1,
+    borderColor: THEME.colors.borderSubtle,
+    borderRadius: THEME.radii.squircle,
     paddingVertical: 13,
     paddingHorizontal: 15,
-    borderRadius: 12,
-    backgroundColor: '#1A1F29',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   optionRowSelected: {
-    borderColor: THEME.colors.primaryRed,
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    borderColor: THEME.colors.borderActive,
+    backgroundColor: THEME.colors.surfaceActive,
   },
   optionLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
     gap: 10,
   },
-  optionText: {
-    fontSize: 13,
+  optionTexts: {
+    flex: 1,
+  },
+  optionTitle: {
     color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.cardTitle,
     fontFamily: THEME.fonts.semibold,
   },
-  optionTextSelected: {
-    color: THEME.colors.primaryRed,
-    fontFamily: THEME.fonts.extrabold,
-  },
-  optBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 5,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-  },
-  optBadgeSelected: {
-    backgroundColor: THEME.colors.primaryRed,
-  },
-  optBadgeText: {
-    fontSize: 10,
+  optionTitleSelected: {
     fontFamily: THEME.fonts.bold,
-    color: THEME.colors.textSecondary,
   },
-  optBadgeTextSelected: {
-    color: '#09090F',
+  optionDesc: {
+    marginTop: 2,
+    color: THEME.colors.textMuted,
+    fontSize: THEME.typography.sizes.small,
+    fontFamily: THEME.fonts.medium,
+  },
+  badge: {
+    backgroundColor: THEME.colors.surfaceActive,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: THEME.radii.sm,
+    marginLeft: 10,
+  },
+  badgeSelected: {
+    backgroundColor: THEME.colors.primary,
+  },
+  badgeText: {
+    color: THEME.colors.textSecondary,
+    fontSize: THEME.typography.sizes.badge,
+    fontFamily: THEME.fonts.bold,
+    letterSpacing: THEME.typography.letterSpacing.wide,
+  },
+  badgeTextSelected: {
+    color: THEME.colors.background,
     fontFamily: THEME.fonts.extrabold,
   },
+
+  // ── Vitesses ──
   speedGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1575,60 +1382,36 @@ const styles = StyleSheet.create({
   speedCard: {
     width: '31%',
     paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: '#1A1F29',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: THEME.radii.card,
+    backgroundColor: THEME.colors.card,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: THEME.colors.borderSubtle,
+    alignItems: 'center',
   },
   speedCardSelected: {
-    backgroundColor: THEME.colors.primaryRed,
-    borderColor: THEME.colors.primaryRed,
+    backgroundColor: THEME.colors.primary,
+    borderColor: THEME.colors.primary,
   },
   speedCardText: {
-    fontSize: 13,
+    color: THEME.colors.textPrimary,
+    fontSize: THEME.typography.sizes.cardTitle,
     fontFamily: THEME.fonts.bold,
-    color: '#FFFFFF',
   },
   speedCardTextSelected: {
-    color: '#09090F',
+    color: THEME.colors.background,
     fontFamily: THEME.fonts.extrabold,
   },
-  trackSubtext: {
-    fontSize: 11,
-    color: THEME.colors.textMuted,
-    marginTop: 2,
-  },
-  activeBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
+
+  emptyBox: {
+    backgroundColor: THEME.colors.searchBar,
+    borderRadius: THEME.radii.card,
     borderWidth: 1,
-    borderColor: THEME.colors.primaryRed,
+    borderColor: THEME.colors.borderSubtle,
+    padding: THEME.spacing.md,
   },
-  activeBadgeText: {
-    fontSize: 10,
-    fontFamily: THEME.fonts.extrabold,
-    color: THEME.colors.primaryRed,
-    letterSpacing: 0.5,
-  },
-  emptyTrackBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 14,
-    backgroundColor: '#191C24',
-    borderRadius: 12,
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-  },
-  emptyTrackText: {
-    fontSize: 12,
+  emptyText: {
     color: THEME.colors.textMuted,
-    flex: 1,
-    lineHeight: 17,
+    fontSize: THEME.typography.sizes.caption,
+    fontFamily: THEME.fonts.medium,
   },
 });

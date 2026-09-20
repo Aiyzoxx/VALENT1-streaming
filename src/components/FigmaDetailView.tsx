@@ -18,6 +18,9 @@ import { MediaItem, Episode } from '../types/media';
 import { THEME } from '../constants/theme';
 import { tmdb, tmdbImage } from '../api/tmdb';
 import { AmbientGlow } from './common/AmbientGlow';
+import { DownloadSheet } from './DownloadSheet';
+import { useDownloads, DownloadRecord } from '../downloads/DownloadsContext';
+import { OfflineQuality } from '../api/hlsOffline';
 
 interface FigmaDetailViewProps {
   item: MediaItem;
@@ -154,6 +157,55 @@ export const FigmaDetailView: React.FC<FigmaDetailViewProps> = ({
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (_) {}
     onPlay(item, ep);
+  };
+
+  // ── Téléchargement hors-ligne ─────────────────────────────────────────────
+  const { downloads: _dlTick, getRecord, startDownload, pauseDownload, resumeDownload } = useDownloads();
+  type DlTarget = { kind: 'film' } | { kind: 'episode'; ep: Episode } | { kind: 'season' };
+  const [dlTarget, setDlTarget] = React.useState<DlTarget | null>(null);
+  // undefined = sheet fermé, null = film, Episode = épisode ciblé.
+  const isLive = item.type === 'live';
+
+  const openDlSheet = (ep: Episode | null) => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch (_) {}
+    setDlTarget(ep ? { kind: 'episode', ep } : { kind: 'film' });
+  };
+
+  const handleDlPick = async (quality: OfflineQuality) => {
+    const target = dlTarget;
+    setDlTarget(null);
+    if (!target) return;
+    try {
+      if (target.kind === 'film') {
+        await startDownload(item, null, quality);
+      } else if (target.kind === 'episode') {
+        await startDownload(item, target.ep, quality);
+      } else {
+        // Saison : file tous les épisodes non terminés avec la même qualité.
+        for (const ep of seasonEpisodes) {
+          const r = getRecord(item.id, ep.id);
+          if (r && (r.status === 'done' || r.status === 'queued' || r.status === 'downloading')) continue;
+          try {
+            await startDownload(item, ep, quality);
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.warn('Download start failed:', e);
+    }
+  };
+
+  const handleDlPress = (rec: DownloadRecord | undefined, ep: Episode | null) => {
+    if (!rec || rec.status === 'error') {
+      if (rec?.status === 'error') resumeDownload(rec.key);
+      else openDlSheet(ep);
+      return;
+    }
+    if (rec.status === 'downloading' || rec.status === 'queued') pauseDownload(rec.key);
+    else if (rec.status === 'paused') resumeDownload(rec.key);
+    // done : rien (la lecture utilise déjà la version locale).
   };
 
   // Traitement et parsing des épisodes réels
@@ -410,6 +462,12 @@ export const FigmaDetailView: React.FC<FigmaDetailViewProps> = ({
 
           {/* Grand Bouton PLAY Rouge Central Figma avec pulsation et feedback tactile */}
           <View style={styles.playButtonWrapper}>
+            {allEpisodes.length === 0 && !isLive && (
+              <DlCircleButton
+                rec={getRecord(item.id)}
+                onPress={() => handleDlPress(getRecord(item.id), null)}
+              />
+            )}
             <Animated.View style={{ transform: [{ scale: Animated.multiply(playPulse, playBtnPressScale) }] }}>
               <TouchableOpacity
                 style={styles.playButtonRed}
@@ -450,7 +508,21 @@ export const FigmaDetailView: React.FC<FigmaDetailViewProps> = ({
         {/* Section Episodes (si série) */}
         {allEpisodes.length > 0 && (
           <View style={styles.episodesSection}>
-            <Text style={styles.sectionHeaderTitle}>Episodes</Text>
+            <View style={styles.episodesHeaderRow}>
+              <Text style={styles.sectionHeaderTitle}>Episodes</Text>
+              {!isLive && seasonEpisodes.length > 0 && (
+                <SeasonDlButton
+                  done={seasonEpisodes.filter(ep => getRecord(item.id, ep.id)?.status === 'done').length}
+                  total={seasonEpisodes.length}
+                  onPress={() => {
+                    try {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    } catch (_) {}
+                    setDlTarget({ kind: 'season' });
+                  }}
+                />
+              )}
+            </View>
 
             {seasons.length > 1 && (
               <ScrollView
@@ -483,12 +555,16 @@ export const FigmaDetailView: React.FC<FigmaDetailViewProps> = ({
             >
               {seasonEpisodes.map((ep, idx) => {
                 const displayTitle = epTitles[ep.id];
+                const fullEp = displayTitle ? { ...ep, title: displayTitle } : ep;
+                const rec = getRecord(item.id, ep.id);
                 return (
                   <AnimatedEpisodeCard
                     key={ep.id || idx}
-                    ep={displayTitle ? { ...ep, title: displayTitle } : ep}
+                    ep={fullEp}
                     imageSource={getEpisodeImage(ep, idx)}
                     onPress={() => handlePlayEpisode(ep)}
+                    dlRec={rec}
+                    onDlPress={isLive ? undefined : () => handleDlPress(rec, ep)}
                   />
                 );
               })}
@@ -506,6 +582,20 @@ export const FigmaDetailView: React.FC<FigmaDetailViewProps> = ({
 
         <View style={{ height: THEME.spacing.bottomNavPadding }} />
       </Animated.ScrollView>
+
+      <DownloadSheet
+        visible={dlTarget !== null}
+        title={item.title}
+        subtitle={
+          dlTarget?.kind === 'episode'
+            ? `S${dlTarget.ep.season} E${dlTarget.ep.episodeNumber} · ${dlTarget.ep.title}`
+            : dlTarget?.kind === 'season'
+              ? `Saison ${activeSeason} · ${seasonEpisodes.length} épisodes`
+              : null
+        }
+        onPick={handleDlPick}
+        onClose={() => setDlTarget(null)}
+      />
     </Animated.View>
   );
 };
@@ -514,7 +604,9 @@ const AnimatedEpisodeCard: React.FC<{
   ep: Episode;
   imageSource: any;
   onPress: () => void;
-}> = ({ ep, imageSource, onPress }) => {
+  dlRec?: DownloadRecord;
+  onDlPress?: () => void;
+}> = ({ ep, imageSource, onPress, dlRec, onDlPress }) => {
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   const handlePressIn = () => {
@@ -559,8 +651,83 @@ const AnimatedEpisodeCard: React.FC<{
             {ep.title}
           </Text>
         </View>
+        {onDlPress && (
+          <TouchableOpacity
+            style={styles.epDlBadge}
+            onPress={onDlPress}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={dlIconFor(dlRec)}
+              size={15}
+              color={dlRec?.status === 'done' ? THEME.colors.matchGreen : '#FFFFFF'}
+            />
+            {(dlRec?.status === 'downloading' || dlRec?.status === 'queued') && (
+              <Text style={styles.epDlPct}>{Math.round((dlRec.progress || 0) * 100)}%</Text>
+            )}
+          </TouchableOpacity>
+        )}
       </TouchableOpacity>
     </Animated.View>
+  );
+};
+
+/** Icône selon l'état du téléchargement. */
+function dlIconFor(rec: DownloadRecord | undefined): keyof typeof Ionicons.glyphMap {
+  if (!rec) return 'arrow-down';
+  switch (rec.status) {
+    case 'downloading':
+    case 'queued':
+      return 'pause';
+    case 'paused':
+      return 'arrow-down';
+    case 'done':
+      return 'checkmark-circle';
+    case 'error':
+      return 'alert-circle-outline';
+  }
+}
+
+/** Bouton rond de téléchargement (films) : état + progression. */
+const DlCircleButton: React.FC<{
+  rec: DownloadRecord | undefined;
+  onPress: () => void;
+}> = ({ rec, onPress }) => (
+  <TouchableOpacity style={styles.dlCircleBtn} onPress={onPress} activeOpacity={0.8}>
+    <Ionicons
+      name={dlIconFor(rec)}
+      size={22}
+      color={rec?.status === 'done' ? THEME.colors.matchGreen : '#FFFFFF'}
+    />
+    {(rec?.status === 'downloading' || rec?.status === 'queued') && (
+      <Text style={styles.dlPct}>{Math.round((rec.progress || 0) * 100)}%</Text>
+    )}
+  </TouchableOpacity>
+);
+
+/** Bouton "toute la saison" : volontairement discret (icône + compteur). */
+const SeasonDlButton: React.FC<{
+  done: number;
+  total: number;
+  onPress: () => void;
+}> = ({ done, total, onPress }) => {
+  const allDone = total > 0 && done >= total;
+  return (
+    <TouchableOpacity
+      style={styles.seasonDlBtn}
+      onPress={onPress}
+      activeOpacity={0.7}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    >
+      <Ionicons
+        name={allDone ? 'checkmark' : 'arrow-down'}
+        size={15}
+        color={allDone ? THEME.colors.matchGreen : THEME.colors.textMuted}
+      />
+      <Text style={[styles.seasonDlText, allDone && styles.seasonDlTextDone]}>
+        {allDone ? 'Prête' : `${done}/${total}`}
+      </Text>
+    </TouchableOpacity>
   );
 };
 
@@ -616,6 +783,9 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     bottom: 24,
     zIndex: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
   },
   playButtonRed: {
     width: 60,
@@ -625,6 +795,64 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 8,
+  },
+  dlCircleBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dlPct: {
+    marginTop: 1,
+    fontSize: 9,
+    fontFamily: THEME.fonts.extrabold,
+    color: '#FFFFFF',
+  },
+  epDlBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    minWidth: 34,
+    height: 34,
+    paddingHorizontal: 6,
+    borderRadius: 17,
+    backgroundColor: 'rgba(9,9,15,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  epDlPct: {
+    fontSize: 9,
+    fontFamily: THEME.fonts.extrabold,
+    color: '#FFFFFF',
+  },
+  episodesHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingRight: THEME.spacing.screen,
+    marginBottom: THEME.spacing.sm,
+  },
+  seasonDlBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+  },
+  seasonDlText: {
+    fontSize: THEME.typography.sizes.small,
+    fontFamily: THEME.fonts.semibold,
+    color: THEME.colors.textMuted,
+  },
+  seasonDlTextDone: {
+    color: THEME.colors.matchGreen,
   },
   titleSection: {
     alignItems: 'center',

@@ -13,12 +13,10 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Haptics from 'expo-haptics';
 import { MediaItem } from '../types/media';
 import { THEME } from '../constants/theme';
-import { CATEGORIES } from '../data/catalog';
 import { tmdb } from '../api/tmdb';
-import { FilterSquircle, MediaPosterCard, ScreenBackground, AvatarPlaceholder } from './common';
+import { MediaPosterCard, ScreenBackground, AvatarPlaceholder } from './common';
 
 interface FigmaHomeViewProps {
   catalog: MediaItem[];
@@ -33,9 +31,6 @@ const CARD_WIDTH = width * 0.60;
 const CARD_HEIGHT = CARD_WIDTH * 1.48;
 const SPACING = 14;
 const SNAP_INTERVAL = CARD_WIDTH + SPACING;
-
-// Genres proposés (issus des catégories du catalogue, hors Tout/Films/Séries).
-const GENRE_LIST = CATEGORIES.filter(c => !['Tout', 'Films', 'Séries'].includes(c));
 
 // Normalisation pour apparier les titres TMDB (fr) avec le catalogue local.
 const normTitle = (s: string) =>
@@ -53,7 +48,6 @@ const POSTER_SEX_ED = require('../../assets/figma/poster_sex_education.png');
 
 export const FigmaHomeView: React.FC<FigmaHomeViewProps> = ({
   catalog,
-  history,
   onSelectItem,
   onOpenVoiceSearch,
   accountName,
@@ -61,9 +55,6 @@ export const FigmaHomeView: React.FC<FigmaHomeViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   // Frappe fluide : le filtrage (5000 items) utilise la valeur différée.
   const deferredSearch = useDeferredValue(searchQuery);
-  const [activeFilter, setActiveFilter] = useState<'genre' | 'top_imdb' | 'watched' | null>(null);
-  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
-  const showGenrePicker = activeFilter === 'genre' && !selectedGenre;
 
   // Valeur animée native pour le carrousel 3D Coverflow
   // Initialisée à SNAP_INTERVAL pour centrer d'emblée Money Heist (index 1) avec Lucifer à gauche et Sex Education à droite
@@ -210,40 +201,13 @@ export const FigmaHomeView: React.FC<FigmaHomeViewProps> = ({
     return { uri: item.posterUrl };
   };
 
-  // Filtrage dynamique selon le filtre cliqué.
-  // Résultats plafonnés à 30 cartes : la grille home n'est pas virtualisée,
-  // monter des centaines d'images d'un coup = freeze voire crash mémoire.
+  // Recherche locale : résultats plafonnés à 30 cartes (grille non virtualisée).
   const capResults = (list: MediaItem[]) => ({
     items: list.slice(0, 30),
     total: list.length,
   });
 
-  // Compteurs par genre pour le sélecteur.
-  const genreCounts = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const item of catalog) {
-      for (const g of item.genres ?? []) m[g] = (m[g] ?? 0) + 1;
-    }
-    return m;
-  }, [catalog]);
-
   const filteredCatalog = useMemo((): { items: MediaItem[]; total: number } | null => {
-    let list = catalog;
-
-    if (activeFilter === 'watched') {
-      const watchedItems = history.map(h => h.item);
-      return capResults(watchedItems.length > 0 ? watchedItems : catalog.slice(0, 15));
-    }
-
-    if (activeFilter === 'top_imdb') {
-      return capResults([...catalog].sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)).slice(0, 20));
-    }
-
-    if (activeFilter === 'genre') {
-      if (!selectedGenre) return null;
-      return capResults(catalog.filter(item => item.genres?.includes(selectedGenre)));
-    }
-
     if (deferredSearch.trim().length > 0) {
       const q = deferredSearch.toLowerCase();
       return capResults(catalog.filter(item =>
@@ -251,30 +215,14 @@ export const FigmaHomeView: React.FC<FigmaHomeViewProps> = ({
         item.genres?.some(g => g.toLowerCase().includes(q))
       ));
     }
-
     return null;
-  }, [catalog, activeFilter, deferredSearch, history, selectedGenre]);
+  }, [catalog, deferredSearch]);
 
   // Films populaires : du moment (TMDB) si dispo, sinon début du catalogue.
   const popularMovies = useMemo(() => {
     if (livePopular) return livePopular;
     return catalog.filter(item => item.type === 'movie').slice(0, 15);
   }, [catalog, livePopular]);
-
-  const handleFilterPress = (filter: 'genre' | 'top_imdb' | 'watched') => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-    setSelectedGenre(null);
-    setActiveFilter(prev => (prev === filter ? null : filter));
-  };
-
-  const handleGenrePress = (genre: string) => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-    setSelectedGenre(genre);
-  };
 
   return (
     <ScreenBackground>
@@ -323,71 +271,10 @@ export const FigmaHomeView: React.FC<FigmaHomeViewProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* 3. Section Filters (4 Squircle Cards) */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.filtersSectionTitle}>Filters</Text>
-        </View>
-
-        <View style={styles.filtersRow}>
-          <FilterSquircle
-            label="Genre"
-            iconName="grid"
-            isActive={activeFilter === 'genre'}
-            onPress={() => handleFilterPress('genre')}
-          />
-          <FilterSquircle
-            label="Top IMDB"
-            iconName="star"
-            isActive={activeFilter === 'top_imdb'}
-            onPress={() => handleFilterPress('top_imdb')}
-            activeColor={THEME.colors.goldStar}
-          />
-          <FilterSquircle
-            label="Watched"
-            iconName="film-outline"
-            isActive={activeFilter === 'watched'}
-            onPress={() => handleFilterPress('watched')}
-          />
-        </View>
-
-        {/* Si un filtre ou recherche est actif, afficher la grille de résultats */}
-        {showGenrePicker ? (
+        {/* 3. Résultats de recherche (si frappe en cours) */}
+        {filteredCatalog ? (
           <View style={styles.filteredResultsSection}>
-            <Text style={styles.featuredTitleBold}>Genres</Text>
-            <View style={styles.genreList}>
-              {GENRE_LIST.map(g => (
-                <TouchableOpacity
-                  key={g}
-                  style={styles.genreRow}
-                  onPress={() => handleGenrePress(g)}
-                  activeOpacity={0.88}
-                >
-                  <Text style={styles.genreRowText}>{g}</Text>
-                  <View style={styles.genreRowRight}>
-                    <Text style={styles.genreRowCount}>{genreCounts[g] ?? 0}</Text>
-                    <Ionicons name="chevron-forward" size={16} color={THEME.colors.textMuted} />
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ) : filteredCatalog ? (
-          <View style={styles.filteredResultsSection}>
-            {activeFilter === 'genre' && selectedGenre ? (
-              <TouchableOpacity
-                style={styles.genreBack}
-                onPress={() => setSelectedGenre(null)}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="chevron-back" size={16} color={THEME.colors.textMuted} />
-                <Text style={styles.genreBackText}>Genres</Text>
-              </TouchableOpacity>
-            ) : null}
-            <Text style={styles.featuredTitleBold}>
-              {activeFilter === 'genre' ? (selectedGenre ?? 'Genres') :
-               activeFilter === 'top_imdb' ? 'Top IMDB Notes' :
-               activeFilter === 'watched' ? 'Déjà Regardés' : 'Résultats de recherche'}
-            </Text>
+            <Text style={styles.featuredTitleBold}>Résultats de recherche</Text>
             <Text style={styles.resultsCount}>
               {filteredCatalog.total} {filteredCatalog.total > 1 ? 'résultats' : 'résultat'}
               {filteredCatalog.total > filteredCatalog.items.length
