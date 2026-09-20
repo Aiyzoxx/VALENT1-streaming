@@ -21,6 +21,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { THEME } from '../constants/theme';
+import { resolveVariantUrl } from '../api/hls';
 
 interface VideoPlayerViewProps {
   streamUrl: string;
@@ -148,10 +149,22 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const seekBackScale = useRef(new Animated.Value(1)).current;
   const seekFwdScale = useRef(new Animated.Value(1)).current;
 
+  // URI réellement jouée : master par défaut, variante directe en repli
+  // si AVPlayer rejette la master (-12646 playlist parse error).
+  const [activeUri, setActiveUri] = useState(streamUrl);
+  const [fallbackTried, setFallbackTried] = useState(false);
+  const [usingFallback, setUsingFallback] = useState(false);
+  useEffect(() => {
+    setActiveUri(streamUrl);
+    setFallbackTried(false);
+    setUsingFallback(false);
+    setLoadTimedOut(false);
+  }, [streamUrl]);
+
   // Source HLS explicite (doc v57: contentType 'hls' requis si pas d'extension standard).
   const videoSource = useMemo(
-    () => ({ uri: streamUrl, contentType: 'hls' as const }),
-    [streamUrl]
+    () => ({ uri: activeUri, contentType: 'hls' as const }),
+    [activeUri]
   );
 
   // Setup sans play() immédiat : play quand readyToPlay (évite stall AVPlayer).
@@ -188,7 +201,29 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     if (status !== 'loading') return;
     const t = setTimeout(() => setLoadTimedOut(true), 30000);
     return () => clearTimeout(t);
-  }, [status, streamUrl]);
+  }, [status, streamUrl, activeUri]);
+
+  // Repli automatique : si AVPlayer rejette la master playlist (-12646),
+  // bascule une fois sur la variante directe (muxée vidéo + audio).
+  useEffect(() => {
+    if (status !== 'error' || fallbackTried || usingFallback) return;
+    setFallbackTried(true);
+    let alive = true;
+    (async () => {
+      const variant = await resolveVariantUrl(streamUrl);
+      if (!alive || !variant) return;
+      setUsingFallback(true);
+      setLoadTimedOut(false);
+      didStartRef.current = false;
+      setActiveUri(variant);
+      try {
+        await player.replaceAsync({ uri: variant, contentType: 'hls' as const });
+      } catch (_) {}
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [status, fallbackTried, usingFallback, streamUrl, player]);
 
   const handleRetry = useCallback(async () => {
     setLoadTimedOut(false);
