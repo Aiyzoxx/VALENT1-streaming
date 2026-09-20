@@ -1,0 +1,27 @@
+services:
+  pocketbase:
+    image: ghcr.io/muchobien/pocketbase:latest
+    container_name: streamflow-pb
+    restart: unless-stopped
+    ports:
+      # Localhost uniquement : pilotage via SSH, jamais exposé sur internet.
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ./pb_data:/pb_data
+    # Caddy reste la seule entrée publique (80/443).
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: streamflow-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

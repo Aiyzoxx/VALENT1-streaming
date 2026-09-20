@@ -1,0 +1,5 @@
+# Le DNS api.tribuneo.xyz doit pointer vers l'IP du VPS
+# AVANT le 1er démarrage (challenge HTTPS Let's Encrypt).
+api.tribuneo.xyz {
+	reverse_proxy pocketbase:8090
+}

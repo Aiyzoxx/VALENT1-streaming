@@ -1,0 +1,45 @@
+# Build iOS NON SIGNÉ (gratuit, sans compte Apple Developer).
+# Produit un .ipa unsigned -> à installer via Sideloadly (Apple ID gratuit,
+# 7 jours) ou TrollStore. Lancer à la main : Actions > iOS unsigned IPA > Run.
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx expo prebuild --platform ios --non-interactive
+
+      - name: Build unsigned (.app device)
+        run: |
+          xcodebuild -workspace ios/StreamFlow.xcworkspace \
+            -scheme StreamFlow \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package en .ipa
+        run: |
+          mkdir -p Payload
+          cp -R "build/Build/Products/Release-iphoneos/StreamFlow.app" Payload/
+          zip -r StreamFlow-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StreamFlow-unsigned-ipa
+          path: StreamFlow-unsigned.ipa

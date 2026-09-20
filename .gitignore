@@ -33,6 +33,11 @@ yarn-error.*
 # local env files
 .env*.local
 
+# secrets - clé SSH VPS, tokens (ne jamais committer)
+serverkey.txt
+serverkey_clean
+server/.env
+
 # typescript
 *.tsbuildinfo
 
