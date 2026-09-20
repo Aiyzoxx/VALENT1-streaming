@@ -446,6 +446,7 @@ function friendlyDownloadError(e: any): string {
   if (/live non supporté/i.test(msg)) return 'Direct non téléchargeable';
   if (/Playlist vide/i.test(msg)) return 'Flux illisible — réessayez plus tard';
   if (/HTTP (\d+)/.test(msg)) return 'Serveur injoignable — réessayez plus tard';
+  if (/Timeout|trop lente/i.test(msg)) return 'Connexion trop lente — réessayez en WiFi stable';
   if (/Network|fetch|Failed to fetch/i.test(msg)) return 'Connexion perdue — reprendra en WiFi';
   return 'Échec du téléchargement — réessayez';
 }

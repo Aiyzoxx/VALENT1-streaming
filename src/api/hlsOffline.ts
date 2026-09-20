@@ -78,8 +78,7 @@ function resolveUrl(uri: string, base: string): string {
 }
 
 async function fetchText(url: string, signal?: AbortSignal): Promise<string> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const res = await fetchWithRetry(url, { signal, timeoutMs: 30000, retries: 4 });
   return await res.text();
 }
 
@@ -210,9 +209,73 @@ export function parseMedia(text: string, baseUrl: string): { segments: Segment[]
 }
 
 async function downloadBytes(url: string, signal?: AbortSignal): Promise<Uint8Array> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const res = await fetchWithRetry(url, { signal, timeoutMs: 30000, retries: 4 });
   return new Uint8Array(await res.arrayBuffer());
+}
+
+function abortError(): DOMException {
+  return new DOMException('Aborted', 'AbortError');
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      signal?.removeEventListener('abort', onAbort);
+      reject(abortError());
+    };
+    signal?.addEventListener('abort', onAbort);
+  });
+}
+
+/**
+ * fetch avec timeout par tentative + réessais espacés.
+ * Une pause utilisateur (signal aborté) interrompt immédiatement en AbortError.
+ */
+async function fetchWithRetry(
+  url: string,
+  opts: { signal?: AbortSignal; timeoutMs: number; retries: number }
+): Promise<Response> {
+  const { signal, timeoutMs, retries } = opts;
+  let lastErr: unknown = new Error('Échec réseau');
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    if (signal?.aborted) throw abortError();
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const onExtAbort = () => ctrl.abort();
+    signal?.addEventListener('abort', onExtAbort);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (e) {
+      // Pause/annulation utilisateur : on ne réessaie pas.
+      if (signal?.aborted) throw abortError();
+      lastErr = e;
+      if (attempt < retries) {
+        try {
+          await sleep(1000 * attempt, signal);
+        } catch (abortErr) {
+          throw abortErr;
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onExtAbort);
+    }
+  }
+  if (signal?.aborted) throw abortError();
+  // Échec persistant (dont timeouts répétés) : erreur typée, jamais confondue
+  // avec une pause utilisateur — sinon la fiche resterait en "downloading".
+  if ((lastErr as DOMException)?.name === 'AbortError') {
+    throw Object.assign(new Error('Connexion trop lente ou instable'), { name: 'TimeoutError' });
+  }
+  throw lastErr;
 }
 
 /**
@@ -452,8 +515,7 @@ export function directoryBytes(dir: Directory): number {
 export async function downloadCover(imageUrl: string | null, dir: Directory): Promise<string | null> {
   if (!imageUrl) return null;
   try {
-    const res = await fetch(imageUrl);
-    if (!res.ok) return null;
+    const res = await fetchWithRetry(imageUrl, { timeoutMs: 15000, retries: 2 });
     const data = new Uint8Array(await res.arrayBuffer());
     if (data.byteLength === 0) return null;
     const fromUrl = imageUrl.split('?')[0].match(/\.(jpe?g|png|webp)$/i)?.[1]?.toLowerCase();
