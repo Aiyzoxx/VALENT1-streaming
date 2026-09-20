@@ -21,7 +21,7 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import { Directory, File, Paths } from 'expo-file-system';
-import { downloadHlsOffline, downloadCover, OfflineQuality, OFFLINE_QUALITY_LABEL } from '../api/hlsOffline';
+import { downloadHlsOffline, downloadCover, probeLocalBundle, OfflineQuality, OFFLINE_QUALITY_LABEL } from '../api/hlsOffline';
 import { MediaItem, Episode } from '../types/media';
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'done' | 'error';
@@ -424,20 +424,9 @@ function usedBytesOf(list: DownloadRecord[]): number {
   );
 }
 
-/** Bundle local complet ? (master + rendition vidéo avec au moins 1 segment) */
+/** Bundle local complet et lisible ? (master + 1er segment valide) */
 function bundleComplete(localUri: string | null): boolean {
-  if (!localUri) return false;
-  try {
-    const index = new File(localUri);
-    if (!index.exists || index.size === 0) return false;
-    const videoName = localUri.replace(/index\.m3u8$/, 'v.m3u8');
-    const video = new File(videoName);
-    if (!video.exists || video.size === 0) return false;
-    const text = video.textSync();
-    return /_seg_\d+\./.test(text);
-  } catch {
-    return false;
-  }
+  return probeLocalBundle(localUri);
 }
 
 function friendlyDownloadError(e: any): string {
@@ -447,6 +436,7 @@ function friendlyDownloadError(e: any): string {
   if (/Playlist vide/i.test(msg)) return 'Flux illisible — réessayez plus tard';
   if (/HTTP (\d+)/.test(msg)) return 'Serveur injoignable — réessayez plus tard';
   if (/Timeout|trop lente/i.test(msg)) return 'Connexion trop lente — réessayez en WiFi stable';
+  if (/illisible|invalide/i.test(msg)) return 'Réponse serveur invalide — réessayez plus tard';
   if (/Network|fetch|Failed to fetch/i.test(msg)) return 'Connexion perdue — reprendra en WiFi';
   return 'Échec du téléchargement — réessayez';
 }

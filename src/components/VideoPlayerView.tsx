@@ -159,6 +159,8 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   }, [activeSettingsTab, showSettings, tabFade]);
 
   // ── Source HLS + repli variante ──────────────────────────────────────────
+  // Fichier hors-ligne local (file://) : pas de repli réseau, messages dédiés.
+  const isLocalFile = streamUrl.startsWith('file:');
   const [activeUri, setActiveUri] = useState(streamUrl);
   const [fallbackTried, setFallbackTried] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
@@ -211,7 +213,11 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   }, [status, streamUrl, activeUri]);
 
   useEffect(() => {
-    if (status !== 'error' || fallbackTried || usingFallback) return;
+    if (isLocalFile || status !== 'error' || fallbackTried || usingFallback) {
+      // Fichier local : pas de repli réseau possible, on affiche l'erreur telle quelle.
+      if (isLocalFile && status === 'error' && !fallbackTried) setFallbackTried(true);
+      return;
+    }
     setFallbackTried(true);
     let alive = true;
     (async () => {
@@ -231,15 +237,33 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     };
   }, [status, fallbackTried, usingFallback, streamUrl, activeUri, player]);
 
+  // Diagnostic : log l'erreur native des fichiers hors-ligne (cause exacte).
+  useEffect(() => {
+    if (status === 'error' && isLocalFile) {
+      console.warn(
+        'Offline playback failed:',
+        activeUri,
+        '| native:',
+        (error as { message?: string } | null)?.message ?? error
+      );
+    }
+  }, [status, isLocalFile, activeUri, error]);
+
   const handleRetry = useCallback(async () => {
     setLoadTimedOut(false);
     setIsRetrying(true);
     didStartRef.current = false;
     try {
-      const playable = await resolvePlayableStreamUrl(streamUrl);
-      if (playable !== activeUri) setActiveUri(playable);
-      await player.replaceAsync({ uri: playable, contentType: 'hls' as const });
-      player.play();
+      if (isLocalFile) {
+        // Fichier local : simple re-tentative, aucune résolution réseau.
+        await player.replaceAsync({ uri: activeUri, contentType: 'hls' as const });
+        player.play();
+      } else {
+        const playable = await resolvePlayableStreamUrl(streamUrl);
+        if (playable !== activeUri) setActiveUri(playable);
+        await player.replaceAsync({ uri: playable, contentType: 'hls' as const });
+        player.play();
+      }
     } catch {
       try {
         player.play();
@@ -247,7 +271,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     } finally {
       setTimeout(() => setIsRetrying(false), 1000);
     }
-  }, [player, streamUrl, activeUri]);
+  }, [player, streamUrl, activeUri, isLocalFile]);
 
   // ── Pistes ───────────────────────────────────────────────────────────────
   const { availableAudioTracks } = useEvent(player, 'availableAudioTracksChange', {
@@ -505,7 +529,9 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const playerErrorMsg =
     (error as { message?: string } | null)?.message ??
     (loadTimedOut ? 'Délai dépassé sans image. Vérifiez la connexion.' : '');
-  const live = isLive || player?.isLive;
+  // Pas de badge DIRECT sur une erreur : durée inconnue ≠ live.
+  const live = isLive || (player?.isLive === true && status !== 'error');
+  const isLocalPlayback = activeUri.startsWith('file:');
   const shownTime = isScrubbing ? scrubValue : currentTimeState;
 
   const topPad = Math.max(insets.top, Platform.OS === 'ios' ? 44 : 20);
@@ -540,6 +566,11 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                 <Ionicons name="alert-circle-outline" size={30} color={THEME.colors.primary} />
               </View>
               <Text style={styles.errorTitle}>Lecture impossible</Text>
+              {isLocalPlayback && (
+                <Text style={[styles.errorMsg, { textAlign: 'center', paddingHorizontal: 24 }]}>
+                  Fichier hors-ligne illisible — supprimez-le et retéléchargez-le en WiFi.
+                </Text>
+              )}
               {!!playerErrorMsg && <Text style={styles.errorMsg} numberOfLines={3}>{playerErrorMsg}</Text>}
               <TouchableOpacity style={styles.retryBtn} onPress={handleRetry} activeOpacity={0.85}>
                 <Ionicons name="refresh" size={16} color={THEME.colors.background} />

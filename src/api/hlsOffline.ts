@@ -393,6 +393,38 @@ function remoteExt(url: string): string {
 }
 
 /**
+ * Valide qu'un payload ressemble bien à son format (détecte les pages
+ * d'erreur HTML servies en 200 OK à la place d'un segment).
+ */
+function validPayload(ext: string, data: Uint8Array): boolean {
+  if (data.byteLength === 0) return false;
+  switch (ext) {
+    case 'ts':
+      return data[0] === 0x47; // sync byte MPEG-TS
+    case 'm4s':
+    case 'mp4':
+    case 'm4a':
+      // 'ftyp' aux octets 4-7
+      return (
+        data.byteLength > 8 &&
+        data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70
+      );
+    case 'aac':
+      // syncword ADTS 0xFFFx
+      return data.byteLength > 1 && data[0] === 0xff && (data[1] & 0xf0) === 0xf0;
+    case 'vtt':
+    case 'webvtt':
+      return (
+        data.byteLength > 6 &&
+        data[0] === 0x57 && data[1] === 0x45 && data[2] === 0x42 &&
+        data[3] === 0x56 && data[4] === 0x54 && data[5] === 0x54
+      );
+    default:
+      return data.byteLength > 0;
+  }
+}
+
+/**
  * Télécharge une rendition (media playlist) : clés, init-maps, segments,
  * puis écrit `<prefix>.m3u8` local. Les fichiers existants sont sautés (reprise).
  */
@@ -424,6 +456,7 @@ async function downloadRendition(
     const file = new File(dir, name);
     if (!file.exists || file.size === 0) {
       const data = await downloadBytes(keyUris[i], signal);
+      if (data.byteLength === 0) throw new Error('Clé de chiffrement vide — réponse serveur invalide');
       file.write(data);
       onBytes(data.byteLength);
     } else {
@@ -438,6 +471,7 @@ async function downloadRendition(
     const file = new File(dir, name);
     if (!file.exists || file.size === 0) {
       const data = await downloadBytes(mapUris[i], signal);
+      if (!validPayload(ext, data)) throw new Error('Segment d\u2019init illisible — réponse serveur invalide');
       file.write(data);
       onBytes(data.byteLength);
     } else {
@@ -447,18 +481,24 @@ async function downloadRendition(
   }
 
   // Segments (pool de workers, reprise : fichiers existants sautés).
+  // Chaque payload est validé (magic bytes) : une page d'erreur HTML servie
+  // en 200 OK est rejetée au lieu de corrompre silencieusement le bundle.
   let cursor = 0;
   const worker = async () => {
     while (true) {
       const i = cursor++;
       if (i >= segments.length) return;
       throwIfAborted();
-      const name = `${prefix}_seg_${String(i).padStart(5, '0')}.${remoteExt(segments[i].uri)}`;
+      const ext = remoteExt(segments[i].uri);
+      const name = `${prefix}_seg_${String(i).padStart(5, '0')}.${ext}`;
       const file = new File(dir, name);
       if (file.exists && file.size > 0) {
         onSegment(file.size);
       } else {
         const data = await downloadBytes(segments[i].uri, signal);
+        if (!validPayload(ext, data)) {
+          throw new Error(`Segment ${i + 1}/${segments.length} illisible — réponse serveur invalide`);
+        }
         file.write(data);
         onSegment(data.byteLength);
       }
@@ -508,6 +548,35 @@ export function directoryBytes(dir: Directory): number {
   }
 }
 
+/**
+ * Sonde un bundle local : master + rendition vidéo référençant des segments,
+ * et premier segment valide (magic bytes). Détecte les bundles corrompus
+ * (ex. pages d'erreur HTML enregistrées comme segments).
+ */
+export function probeLocalBundle(localUri: string | null): boolean {
+  if (!localUri) return false;
+  try {
+    const index = new File(localUri);
+    if (!index.exists || index.size === 0) return false;
+    const videoName = localUri.replace(/index\.m3u8$/, 'v.m3u8');
+    const video = new File(videoName);
+    if (!video.exists || video.size === 0) return false;
+    const text = video.textSync();
+    const m = text.match(/([A-Za-z0-9_-]+\.(ts|m4s|mp4|aac))\s*$/m);
+    if (!m) return false;
+    const segFile = new File(video.parentDirectory, m[1]);
+    if (!segFile.exists || segFile.size === 0) return false;
+    const handle = segFile.open();
+    try {
+      const head = handle.readBytes(8);
+      return validPayload(m[2].toLowerCase(), head);
+    } finally {
+      handle.close();
+    }
+  } catch {
+    return false;
+  }
+}
 /**
  * Télécharge une cover (poster / miniature d'épisode) dans le dossier du
  * téléchargement. Best-effort : retourne null en cas d'échec (non bloquant).
