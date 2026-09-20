@@ -34,7 +34,10 @@ jobs:
           echo "Workspace: $WS_FILE"
           test -n "$WS_FILE" || (echo "Aucun .xcworkspace genere par prebuild" && exit 1)
           echo "WORKSPACE=$WS_FILE" >> $GITHUB_ENV
-          SCHEME=$(basename $(ls "$WS_FILE/xcshareddata/xcschemes/"*.xcscheme | head -1) .xcscheme)
+          SCHEME=$(basename $(ls ios/*.xcodeproj/xcshareddata/xcschemes/*.xcscheme | head -1) .xcscheme)
+          if [ -z "$SCHEME" ] || [ "$SCHEME" = ".xcscheme" ]; then
+            SCHEME=$(basename "$WS_FILE" .xcworkspace)
+          fi
           echo "Scheme: $SCHEME"
           echo "SCHEME=$SCHEME" >> $GITHUB_ENV
 
