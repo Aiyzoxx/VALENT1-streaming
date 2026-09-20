@@ -40,12 +40,3 @@ export interface WatchProgress {
   lastWatched: number; // timestamp
   completed: boolean;
 }
-
-export interface CustomStream {
-  id: string;
-  title: string;
-  url: string;
-  addedAt: number;
-  isLive: boolean;
-  category?: string;
-}

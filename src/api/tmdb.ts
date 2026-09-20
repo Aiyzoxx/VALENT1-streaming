@@ -166,19 +166,4 @@ export const tmdb = {
   similarSeries(id: number, page = 1): Promise<TmdbPaginated<TmdbTv>> {
     return request(`/tv/${id}/similar`, { page });
   },
-
-  /** Top popularité dispo en flatrate chez un provider (région FR). */
-  discoverByProvider(
-    kind: 'movie' | 'tv',
-    providerId: number,
-    page = 1
-  ): Promise<TmdbPaginated<TmdbMovie | TmdbTv>> {
-    return request(`/discover/${kind}`, {
-      page,
-      watch_region: TMDB.region,
-      with_watch_providers: providerId,
-      with_watch_monetization_types: 'flatrate',
-      sort_by: 'popularity.desc',
-    });
-  },
 };

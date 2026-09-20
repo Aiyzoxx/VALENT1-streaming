@@ -660,7 +660,7 @@ const AnimatedEpisodeCard: React.FC<{
             <Ionicons
               name={dlIconFor(dlRec)}
               size={15}
-              color={dlRec?.status === 'done' ? THEME.colors.matchGreen : '#FFFFFF'}
+              color="#FFFFFF"
             />
             {(dlRec?.status === 'downloading' || dlRec?.status === 'queued') && (
               <Text style={styles.epDlPct}>{Math.round((dlRec.progress || 0) * 100)}%</Text>
@@ -697,7 +697,7 @@ const DlCircleButton: React.FC<{
     <Ionicons
       name={dlIconFor(rec)}
       size={22}
-      color={rec?.status === 'done' ? THEME.colors.matchGreen : '#FFFFFF'}
+      color="#FFFFFF"
     />
     {(rec?.status === 'downloading' || rec?.status === 'queued') && (
       <Text style={styles.dlPct}>{Math.round((rec.progress || 0) * 100)}%</Text>
@@ -722,9 +722,9 @@ const SeasonDlButton: React.FC<{
       <Ionicons
         name={allDone ? 'checkmark' : 'arrow-down'}
         size={15}
-        color={allDone ? THEME.colors.matchGreen : THEME.colors.textMuted}
+        color={THEME.colors.textMuted}
       />
-      <Text style={[styles.seasonDlText, allDone && styles.seasonDlTextDone]}>
+      <Text style={styles.seasonDlText}>
         {allDone ? 'Prête' : `${done}/${total}`}
       </Text>
     </TouchableOpacity>
@@ -850,9 +850,6 @@ const styles = StyleSheet.create({
     fontSize: THEME.typography.sizes.small,
     fontFamily: THEME.fonts.semibold,
     color: THEME.colors.textMuted,
-  },
-  seasonDlTextDone: {
-    color: THEME.colors.matchGreen,
   },
   titleSection: {
     alignItems: 'center',

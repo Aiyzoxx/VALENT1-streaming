@@ -7,7 +7,6 @@ import {
   Dimensions,
   Platform,
   Animated,
-  ScrollView,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
@@ -17,10 +16,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CATALOG } from '../data/catalog';
 import { MediaItem } from '../types/media';
 import { THEME } from '../constants/theme';
-import { PLATFORMS } from '../constants/platforms';
 import { ScreenBackground, SearchBarFigma, MediaPosterCard, AvatarPlaceholder } from './common';
 import { useVoiceSearch } from '../hooks/useVoiceSearch';
-import { usePlatforms } from '../hooks/usePlatforms';
 
 interface SearchViewProps {
   onSelectItem: (item: MediaItem) => void;
@@ -82,12 +79,8 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectItem, onPlayItem
   const topPad = insets.top > 0 ? insets.top + 8 : Platform.OS === 'ios' ? 14 : 8;
   const [query, setQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<string>('Tous');
-  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
   // Ref non typée : Animated.FlatList requise pour le onScroll natif.
   const listRef = useRef<any>(null);
-
-  // Disponibilités SVOD (TMDB, cache 7j) : alimente le filtre plateformes.
-  const { platformMap, hasData: hasPlatformData } = usePlatforms(CATALOG);
 
   // La frappe reste fluide : le filtrage lourd utilise la valeur différée.
   const deferredQuery = useDeferredValue(query);
@@ -191,13 +184,6 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectItem, onPlayItem
     setSelectedFilter(prev => (prev === filterId ? prev : filterId));
   }, []);
 
-  const handlePlatformPress = useCallback((platformId: string | null) => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (_) {}
-    setSelectedPlatform(prev => (prev === platformId ? prev : platformId));
-  }, []);
-
   const handleClear = useCallback(() => setQuery(''), []);
 
   // ── Dictée vocale ──────────────────────────────────────────────────────────
@@ -230,7 +216,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectItem, onPlayItem
     }
   }, [isListening, voiceSupported, startListening, stopListening]);
 
-  // Retour en haut + reset pagination quand la catégorie ou la plateforme change.
+  // Retour en haut + reset pagination quand la catégorie change.
   // (Pas sur la frappe : pour ne pas arracher la liste pendant la saisie.)
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
@@ -240,31 +226,22 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectItem, onPlayItem
       } catch (_) {}
     }, 0);
     return () => clearTimeout(t);
-  }, [selectedFilter, selectedPlatform]);
+  }, [selectedFilter]);
 
   const filteredItems = useMemo(() => {
     const q = deferredQuery.trim().toLowerCase();
 
-    // Prédicat plateforme : sans tag, le titre est exclu quand un filtre est actif.
-    const matchesPlatform = (id: string): boolean => {
-      if (!selectedPlatform) return true;
-      return platformMap.get(id)?.includes(selectedPlatform) ?? false;
-    };
-
     if (!q) {
-      if (selectedFilter === 'Tous' && !selectedPlatform) return CATALOG;
-      return CATALOG.filter(
-        i => matchesCategory(i, selectedFilter) && matchesPlatform(i.id)
-      );
+      if (selectedFilter === 'Tous') return CATALOG;
+      return CATALOG.filter(i => matchesCategory(i, selectedFilter));
     }
 
-    // Une seule passe : catégorie + plateforme + recherche + rang de pertinence.
+    // Une seule passe : catégorie + recherche + rang de pertinence.
     const scored: { item: MediaItem; rank: number }[] = [];
     const index = getSearchIndex();
     for (let n = 0; n < index.length; n++) {
       const entry = index[n];
       if (!matchesCategory(entry.item, selectedFilter)) continue;
-      if (!matchesPlatform(entry.item.id)) continue;
       if (!entry.blob.includes(q)) continue;
       let rank = 3;
       if (entry.title === q) rank = 0;
@@ -279,7 +256,7 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectItem, onPlayItem
         (b.item.matchScore || 0) - (a.item.matchScore || 0)
     );
     return scored.map(s => s.item);
-  }, [deferredQuery, selectedFilter, selectedPlatform, platformMap]);
+  }, [deferredQuery, selectedFilter]);
 
   // Sous-ensemble réellement rendu par la FlatList.
   const visibleItems = useMemo(
@@ -404,30 +381,6 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectItem, onPlayItem
                   ))}
                 </View>
               </View>
-              {hasPlatformData && (
-                <View style={styles.platformSection}>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.platformRow}
-                  >
-                    <PlatformChip
-                      label="Toutes"
-                      isActive={selectedPlatform === null}
-                      onPress={() => handlePlatformPress(null)}
-                    />
-                    {PLATFORMS.map(p => (
-                      <PlatformChip
-                        key={p.id}
-                        label={p.label}
-                        isActive={selectedPlatform === p.id}
-                        onPress={() => handlePlatformPress(p.id)}
-                      />
-                    ))}
-                  </ScrollView>
-                  <Text style={styles.platformHint}>Disponibilités SVOD en France · via TMDB</Text>
-                </View>
-              )}
               </Animated.View>
             </View>
           }
@@ -487,24 +440,6 @@ export const SearchView: React.FC<SearchViewProps> = ({ onSelectItem, onPlayItem
     </ScreenBackground>
   );
 };
-
-const PlatformChip = memo<{
-  label: string;
-  isActive: boolean;
-  onPress: () => void;
-}>(function PlatformChip({ label, isActive, onPress }) {
-  return (
-    <TouchableOpacity
-      style={[styles.platformChip, isActive && styles.platformChipActive]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <Text style={[styles.platformChipText, isActive && styles.platformChipTextActive]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-});
 
 const FilterSegment = memo<{
   filterId: string;
@@ -602,42 +537,6 @@ const styles = StyleSheet.create({
   segmentTextActive: {
     color: THEME.colors.textPrimary,
     fontFamily: THEME.fonts.bold,
-  },
-  platformSection: {
-    marginBottom: THEME.spacing.md,
-  },
-  platformRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: THEME.spacing.screen,
-  },
-  platformChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: THEME.radii.full,
-    backgroundColor: THEME.colors.searchBar,
-    borderWidth: 1,
-    borderColor: THEME.colors.searchBorder,
-  },
-  platformChipActive: {
-    backgroundColor: THEME.colors.primary,
-    borderColor: THEME.colors.primary,
-  },
-  platformChipText: {
-    fontSize: THEME.typography.sizes.small,
-    fontFamily: THEME.fonts.semibold,
-    color: THEME.colors.textMuted,
-  },
-  platformChipTextActive: {
-    color: THEME.colors.background,
-    fontFamily: THEME.fonts.bold,
-  },
-  platformHint: {
-    marginTop: 6,
-    paddingHorizontal: THEME.spacing.screen,
-    fontSize: THEME.typography.sizes.badge,
-    fontFamily: THEME.fonts.medium,
-    color: THEME.colors.textMuted,
   },
   listContent: {
     paddingBottom: THEME.spacing.bottomNavPadding,

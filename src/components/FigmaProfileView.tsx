@@ -15,7 +15,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MediaItem, WatchProgress } from '../types/media';
 import { THEME } from '../constants/theme';
 import { ScreenBackground, MediaPosterCard, AvatarPlaceholder } from './common';
-import { StreamTesterView } from './StreamTesterView';
 import { DownloadCard, formatBytes } from './DownloadCard';
 import { useDownloads, DownloadRecord, OFFLINE_QUOTA_BYTES } from '../downloads/DownloadsContext';
 
@@ -24,7 +23,6 @@ interface FigmaProfileViewProps {
   continueWatchingItems: { media: MediaItem; progress: WatchProgress }[];
   onSelectItem: (item: MediaItem) => void;
   onPlayItem: (item: MediaItem) => void;
-  onPlayCustomStream: (stream: { url: string; title: string; isLive: boolean }) => void;
   onPlayDownload?: (rec: DownloadRecord) => void;
   onRemoveHistoryItem?: (id: string) => void;
   accountName?: string;
@@ -32,7 +30,7 @@ interface FigmaProfileViewProps {
   onLogout?: () => void;
 }
 
-type ProfileSubTab = 'favorites' | 'history' | 'studio' | 'downloads';
+type ProfileSubTab = 'favorites' | 'history' | 'downloads';
 
 const { width } = Dimensions.get('window');
 const GRID_GAP = THEME.spacing.md;
@@ -79,7 +77,10 @@ const AnimatedSubTabBtn: React.FC<{
           { transform: [{ scale: scaleAnim }] },
         ]}
       >
-        <Text style={[styles.subTabText, isActive && styles.subTabTextActive]}>
+        <Text
+          style={[styles.subTabText, isActive && styles.subTabTextActive]}
+          numberOfLines={1}
+        >
           {label}
         </Text>
       </Animated.View>
@@ -153,7 +154,6 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
   continueWatchingItems,
   onSelectItem,
   onPlayItem,
-  onPlayCustomStream,
   onPlayDownload,
   accountName,
   accountEmail,
@@ -245,7 +245,7 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
           )}
         </View>
 
-        {/* 3. Sub-Tabs Switcher épuré */}
+        {/* 3. Sub-Tabs : rangée fixe (3 onglets, aucun scroll) */}
         <View style={styles.subTabsRow}>
           <AnimatedSubTabBtn
             label={`Favoris (${favoriteItems.length})`}
@@ -256,11 +256,6 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
             label={`Historique (${continueWatchingItems.length})`}
             isActive={activeSubTab === 'history'}
             onPress={() => handleTabChange('history')}
-          />
-          <AnimatedSubTabBtn
-            label="M3U8 Studio"
-            isActive={activeSubTab === 'studio'}
-            onPress={() => handleTabChange('studio')}
           />
           <AnimatedSubTabBtn
             label={`Téléchargés (${downloads.length})`}
@@ -318,14 +313,7 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
             </View>
           )}
 
-          {/* Tab 3: M3U8 Studio */}
-          {activeSubTab === 'studio' && (
-            <View style={styles.studioContainer}>
-              <StreamTesterView onPlayStream={onPlayCustomStream} />
-            </View>
-          )}
-
-          {/* Tab 4: Téléchargements hors-ligne */}
+          {/* Tab 3: Téléchargements hors-ligne */}
           {activeSubTab === 'downloads' && (
             <View>
               <View style={styles.dlQuotaRow}>
@@ -465,24 +453,25 @@ const styles = StyleSheet.create({
   },
   subTabsRow: {
     flexDirection: 'row',
-    backgroundColor: THEME.colors.searchBar,
-    marginHorizontal: THEME.spacing.screen,
-    borderRadius: THEME.radii.squircle,
-    padding: 4,
+    gap: 8,
+    paddingHorizontal: THEME.spacing.screen,
+    paddingBottom: 2,
     marginBottom: THEME.spacing.xl,
-    borderWidth: 1,
-    borderColor: THEME.colors.searchBorder,
   },
   subTabBtn: {
     flex: 1,
+    paddingHorizontal: 8,
     paddingVertical: 10,
     alignItems: 'center',
-    borderRadius: THEME.radii.card - 4,
+    justifyContent: 'center',
+    borderRadius: THEME.radii.full,
+    backgroundColor: THEME.colors.searchBar,
+    borderWidth: 1,
+    borderColor: THEME.colors.searchBorder,
   },
   subTabBtnActive: {
-    backgroundColor: THEME.colors.filterCardActive,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.25)',
+    backgroundColor: THEME.colors.primary,
+    borderColor: THEME.colors.primary,
   },
   subTabText: {
     fontSize: THEME.typography.sizes.railTitle,
@@ -490,7 +479,7 @@ const styles = StyleSheet.create({
     color: THEME.colors.textMuted,
   },
   subTabTextActive: {
-    color: THEME.colors.textPrimary,
+    color: THEME.colors.background,
     fontFamily: THEME.fonts.extrabold,
   },
   itemsGrid: {
@@ -518,9 +507,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 2,
-  },
-  studioContainer: {
-    paddingHorizontal: THEME.spacing.screen,
   },
   dlQuotaRow: {
     flexDirection: 'row',

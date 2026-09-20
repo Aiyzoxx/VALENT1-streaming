@@ -444,3 +444,26 @@ export function directoryBytes(dir: Directory): number {
     return 0;
   }
 }
+
+/**
+ * Télécharge une cover (poster / miniature d'épisode) dans le dossier du
+ * téléchargement. Best-effort : retourne null en cas d'échec (non bloquant).
+ */
+export async function downloadCover(imageUrl: string | null, dir: Directory): Promise<string | null> {
+  if (!imageUrl) return null;
+  try {
+    const res = await fetch(imageUrl);
+    if (!res.ok) return null;
+    const data = new Uint8Array(await res.arrayBuffer());
+    if (data.byteLength === 0) return null;
+    const fromUrl = imageUrl.split('?')[0].match(/\.(jpe?g|png|webp)$/i)?.[1]?.toLowerCase();
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    const fromCt = ct.includes('png') ? 'png' : ct.includes('webp') ? 'webp' : 'jpg';
+    const ext = fromUrl === 'jpeg' ? 'jpg' : fromUrl ?? fromCt;
+    const file = new File(dir, `cover.${ext}`);
+    file.write(data);
+    return file.uri;
+  } catch {
+    return null;
+  }
+}

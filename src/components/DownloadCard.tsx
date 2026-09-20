@@ -33,8 +33,8 @@ export const DownloadCard: React.FC<{
 
   return (
     <View style={styles.dlCard}>
-      {rec.posterUrl ? (
-        <Image source={{ uri: rec.posterUrl }} style={styles.dlPoster} resizeMode="cover" />
+      {rec.localCoverUri || rec.posterUrl ? (
+        <Image source={{ uri: rec.localCoverUri ?? rec.posterUrl ?? '' }} style={styles.dlPoster} resizeMode="cover" />
       ) : (
         <View style={[styles.dlPoster, styles.dlPosterFallback]}>
           <Ionicons name="film-outline" size={22} color={THEME.colors.textMuted} />

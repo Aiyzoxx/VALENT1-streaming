@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
+  Alert,
   StyleSheet,
   View,
   SafeAreaView,
@@ -106,7 +107,7 @@ function GatedApp() {
 function MainApp({ initialTab }: { initialTab: TabType }) {
   const insets = useSafeAreaInsets();
   const { user, token, logout } = useAuth();
-  const { getLocalUri } = useDownloads();
+  const { getLocalUri, verifyLocal } = useDownloads();
   // Bascule auto vers la page hors-ligne quand la connexion tombe.
   const isOffline = useIsOffline();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
@@ -175,6 +176,13 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
     const initialTime = progress && !progress.completed ? progress.currentTime : 0;
     // Version hors-ligne prioritaire si téléchargée.
     const localUri = getLocalUri(item.id, episode?.id);
+    if (!localUri && isOffline) {
+      Alert.alert(
+        'Hors-ligne',
+        'Ce contenu n\u2019est pas téléchargé. Reconnectez-vous pour le lire en streaming, ou téléchargez-le pour le regarder hors-ligne.'
+      );
+      return;
+    }
     const playableUrl = localUri ?? (await resolvePlayableStreamUrl(episode ? episode.streamUrl : item.streamUrl));
 
     setActiveStream({
@@ -190,6 +198,13 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
   // Launch video player from a finished offline download.
   const handlePlayDownload = (rec: DownloadRecord) => {
     if (!rec.localUri || rec.status !== 'done') return;
+    if (!verifyLocal(rec.key)) {
+      Alert.alert(
+        'Téléchargement incomplet',
+        'Les fichiers hors-ligne sont endommagés ou manquants. Relancez le téléchargement en WiFi.'
+      );
+      return;
+    }
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (_) {}
@@ -200,22 +215,6 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
       initialTime: 0,
       isLive: false,
       mediaId: rec.episodeId ? `${rec.mediaId}_ep_${rec.episodeId}` : rec.mediaId,
-    });
-  };
-
-  // Launch video player from M3U8 Tester
-  const handlePlayCustomStream = async (stream: { url: string; title: string; isLive: boolean }) => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (_) {}
-
-    const playableUrl = await resolvePlayableStreamUrl(stream.url);
-
-    setActiveStream({
-      streamUrl: playableUrl,
-      title: stream.title,
-      subtitle: stream.isLive ? 'Flux Direct M3U8' : 'Flux HLS Externe',
-      isLive: stream.isLive,
     });
   };
 
@@ -310,7 +309,6 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
                   continueWatchingItems={continueWatchingItems}
                   onSelectItem={setDetailItem}
                   onPlayItem={handlePlayMedia}
-                  onPlayCustomStream={handlePlayCustomStream}
                   onPlayDownload={handlePlayDownload}
                   accountName={user.name}
                   accountEmail={user.email}

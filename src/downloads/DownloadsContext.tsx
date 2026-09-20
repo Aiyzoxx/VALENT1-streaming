@@ -21,7 +21,7 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import { Directory, File, Paths } from 'expo-file-system';
-import { downloadHlsOffline, OfflineQuality, OFFLINE_QUALITY_LABEL } from '../api/hlsOffline';
+import { downloadHlsOffline, downloadCover, OfflineQuality, OFFLINE_QUALITY_LABEL } from '../api/hlsOffline';
 import { MediaItem, Episode } from '../types/media';
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'done' | 'error';
@@ -33,6 +33,8 @@ export interface DownloadRecord {
   title: string;
   subtitle: string | null;
   posterUrl: string | null;
+  /** file:// de la cover locale (miniature épisode ou poster), null si absente */
+  localCoverUri: string | null;
   remoteUrl: string;
   quality: OfflineQuality;
   qualityLabel: string;
@@ -57,6 +59,8 @@ interface DownloadsContextValue {
   pauseDownload: (key: string) => void;
   resumeDownload: (key: string) => void;
   removeDownload: (key: string) => Promise<void>;
+  /** Bascule en erreur si le bundle local est incomplet/manquant. Retourne false si KO. */
+  verifyLocal: (key: string) => boolean;
   totalBytes: number;
 }
 
@@ -103,6 +107,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
 
   // ── Chargement initial : vérifie les fichiers, fige les encours en pause ──
   useEffect(() => {
+    let alive = true;
     (async () => {
       let list: DownloadRecord[] = [];
       try {
@@ -113,13 +118,8 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       }
       list = list.map(r => {
         if (r.status === 'done') {
-          try {
-            const f = new File(r.localUri ?? '');
-            if (!r.localUri || !f.exists) {
-              return { ...r, status: 'error' as const, error: 'Fichier manquant — relancez le téléchargement', localUri: null, progress: 0 };
-            }
-          } catch {
-            return { ...r, status: 'error' as const, error: 'Fichier manquant — relancez le téléchargement', localUri: null, progress: 0 };
+          if (!bundleComplete(r.localUri)) {
+            return { ...r, status: 'error' as const, error: 'Fichier incomplet — relancez le téléchargement', localUri: null, progress: 0 };
           }
           return r;
         }
@@ -131,7 +131,27 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       setDownloads(list);
       setLoaded(true);
       await persist(list);
+      // Rattrapage des covers manquantes (anciens téléchargements) — silencieux.
+      for (const r of list) {
+        if (!alive) break;
+        if (r.status !== 'done' || r.localCoverUri || !r.posterUrl) continue;
+        try {
+          const cover = await downloadCover(r.posterUrl, offlineDir(r.key));
+          if (cover && alive) {
+            setDownloads(prev => {
+              const next = prev.map(x => (x.key === r.key ? { ...x, localCoverUri: cover } : x));
+              persist(next);
+              return next;
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
     })();
+    return () => {
+      alive = false;
+    };
   }, [persist]);
 
   const usedBytes = useMemo(
@@ -211,6 +231,13 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         remoteUrl: freshUrl,
         error: null,
       });
+      // Cover locale (best-effort, après le marquage done pour ne pas bloquer).
+      try {
+        const cover = await downloadCover(next.posterUrl, offlineDir(next.key));
+        if (cover) patch(next.key, { localCoverUri: cover });
+      } catch {
+        /* ignore */
+      }
     } catch (e: any) {
       const stillActive =
         downloadsRef.current.find(r => r.key === next.key)?.status === 'downloading';
@@ -265,11 +292,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     (mediaId: string, episodeId?: string): string | null => {
       const rec = downloadsRef.current.find(r => r.key === downloadKeyFor(mediaId, episodeId ?? null));
       if (!rec || rec.status !== 'done' || !rec.localUri) return null;
-      try {
-        return new File(rec.localUri).exists ? rec.localUri : null;
-      } catch {
-        return null;
-      }
+      return bundleComplete(rec.localUri) ? rec.localUri : null;
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [downloads]
@@ -295,7 +318,10 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         episodeId: episode?.id ?? null,
         title: media.title,
         subtitle: episode ? `S${episode.season} E${episode.episodeNumber} · ${episode.title}` : null,
-        posterUrl: media.posterUrl ?? null,
+        posterUrl: episode
+          ? episode.thumbnailUrl || media.backdropUrl || media.posterUrl || null
+          : media.posterUrl ?? null,
+        localCoverUri: existing?.localCoverUri ?? null,
         remoteUrl: episode?.streamUrl ?? media.streamUrl,
         quality,
         qualityLabel: OFFLINE_QUALITY_LABEL[quality],
@@ -357,6 +383,22 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     [persist]
   );
 
+  const verifyLocal = useCallback(
+    (key: string): boolean => {
+      const rec = downloadsRef.current.find(r => r.key === key);
+      if (!rec) return false;
+      if (bundleComplete(rec.localUri)) return true;
+      patch(key, {
+        status: 'error',
+        error: 'Fichier incomplet — relancez le téléchargement',
+        localUri: null,
+        progress: 0,
+      });
+      return false;
+    },
+    [patch]
+  );
+
   const value = useMemo(
     () => ({
       downloads,
@@ -366,9 +408,10 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       pauseDownload,
       resumeDownload,
       removeDownload,
+      verifyLocal,
       totalBytes: usedBytes,
     }),
-    [downloads, getLocalUri, getRecord, startDownload, pauseDownload, resumeDownload, removeDownload, usedBytes]
+    [downloads, getLocalUri, getRecord, startDownload, pauseDownload, resumeDownload, removeDownload, verifyLocal, usedBytes]
   );
 
   return <DownloadsContext.Provider value={value}>{children}</DownloadsContext.Provider>;
@@ -379,6 +422,22 @@ function usedBytesOf(list: DownloadRecord[]): number {
     (t, r) => t + (r.status === 'done' ? r.bytesTotal ?? r.bytesDownloaded : r.bytesDownloaded),
     0
   );
+}
+
+/** Bundle local complet ? (master + rendition vidéo avec au moins 1 segment) */
+function bundleComplete(localUri: string | null): boolean {
+  if (!localUri) return false;
+  try {
+    const index = new File(localUri);
+    if (!index.exists || index.size === 0) return false;
+    const videoName = localUri.replace(/index\.m3u8$/, 'v.m3u8');
+    const video = new File(videoName);
+    if (!video.exists || video.size === 0) return false;
+    const text = video.textSync();
+    return /_seg_\d+\./.test(text);
+  } catch {
+    return false;
+  }
 }
 
 function friendlyDownloadError(e: any): string {
