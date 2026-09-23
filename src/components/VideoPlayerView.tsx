@@ -126,32 +126,9 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const sheetFadeAnim = useRef(new Animated.Value(0)).current;
   const playBtnScale = useRef(new Animated.Value(1)).current;
 
-  // Glissé vertical des barres + flash central play/pause/seek
+  // Glissé vertical des barres
   const topBarSlide = controlsOpacity.interpolate({ inputRange: [0, 1], outputRange: [-14, 0] });
   const bottomBarSlide = controlsOpacity.interpolate({ inputRange: [0, 1], outputRange: [14, 0] });
-  const [flash, setFlash] = useState<{ kind: 'back' | 'fwd'; id: number } | null>(null);
-  const flashOpacity = useRef(new Animated.Value(0)).current;
-  const flashScale = useRef(new Animated.Value(0.7)).current;
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!flash) return;
-    if (flashTimer.current) clearTimeout(flashTimer.current);
-    flashOpacity.setValue(0);
-    flashScale.setValue(0.7);
-    Animated.parallel([
-      Animated.timing(flashOpacity, { toValue: 1, duration: 120, useNativeDriver: true }),
-      Animated.spring(flashScale, { toValue: 1, speed: 22, bounciness: 8, useNativeDriver: true }),
-    ]).start();
-    flashTimer.current = setTimeout(() => {
-      Animated.timing(flashOpacity, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
-        setFlash(cur => (cur?.id === flash.id ? null : cur));
-      });
-    }, 450);
-    return () => {
-      if (flashTimer.current) clearTimeout(flashTimer.current);
-    };
-  }, [flash, flashOpacity, flashScale]);
 
   // Fondu du contenu à chaque changement d'onglet réglages
   const tabFade = useRef(new Animated.Value(1)).current;
@@ -383,12 +360,6 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   };
 
   // ── Actions ──────────────────────────────────────────────────────────────
-  const flashId = useRef(0);
-  const showFlash = (kind: 'back' | 'fwd') => {
-    flashId.current += 1;
-    setFlash({ kind, id: flashId.current });
-  };
-
   const togglePlayPause = () => {
     haptic(Haptics.ImpactFeedbackStyle.Medium);
     Animated.sequence([
@@ -407,7 +378,6 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
 
   const seekBy = (seconds: number) => {
     haptic(Haptics.ImpactFeedbackStyle.Light);
-    showFlash(seconds < 0 ? 'back' : 'fwd');
     if (!player) return;
     try {
       player.seekBy(seconds);
@@ -643,7 +613,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                   <Text style={styles.seekLabel}>10s</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity onPress={togglePlayPause} activeOpacity={0.85}>
+              <TouchableOpacity onPress={togglePlayPause} activeOpacity={1}>
                 <Animated.View style={[styles.playBtn, { transform: [{ scale: playBtnScale }] }]}>
                   <Ionicons
                     name={isPlaying ? 'pause' : 'play'}
@@ -718,28 +688,6 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                 </TouchableOpacity>
               </View>
             </Animated.View>
-
-            {/* ── Flash central play / pause / seek ── */}
-            {flash && (
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.flash,
-                  { opacity: flashOpacity, transform: [{ scale: flashScale }] },
-                ]}
-              >
-                <View style={styles.flashSeek}>
-                  <Ionicons
-                    name={flash.kind === 'back' ? 'play-back' : 'play-forward'}
-                    size={24}
-                    color={THEME.colors.textPrimary}
-                  />
-                  <Text style={styles.flashSeekText}>
-                    {flash.kind === 'back' ? '−10 s' : '+10 s'}
-                  </Text>
-                </View>
-              </Animated.View>
-            )}
           </Animated.View>
         </View>
       </TouchableWithoutFeedback>
@@ -1192,29 +1140,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  flash: {
-    position: 'absolute',
-    alignSelf: 'center',
-    top: '38%',
-    width: 92,
-    height: 92,
-    borderRadius: 46,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 20,
-  },
-  flashSeek: {
-    alignItems: 'center',
-    gap: 2,
-  },
-  flashSeekText: {
-    color: THEME.colors.textPrimary,
-    fontSize: THEME.typography.sizes.small,
-    fontFamily: THEME.fonts.extrabold,
   },
 
   // ── Bas ──

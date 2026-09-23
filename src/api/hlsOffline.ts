@@ -203,7 +203,7 @@ async function fetchWithRetry(
       signal?.removeEventListener('abort', onExtAbort);
     }
   }
-  if (signal?.aborted) throw abortError();
+  if (signal?.aborted || (lastErr as DOMException)?.message === 'Aborted') throw abortError();
   if ((lastErr as DOMException)?.name === 'AbortError') {
     throw Object.assign(new Error('Connexion trop lente ou instable'), { name: 'TimeoutError' });
   }
@@ -213,6 +213,80 @@ async function fetchWithRetry(
 async function downloadBytes(url: string, signal?: AbortSignal): Promise<Uint8Array> {
   const res = await fetchWithRetry(url, { signal, timeoutMs: 30000, retries: 4 });
   return new Uint8Array(await res.arrayBuffer());
+}
+
+/**
+ * Active le flag default-base-is-moof (0x020000) dans chaque boîte tfhd.
+ * Obligatoire pour Apple AVPlayer sous iOS pour Fragmented MP4 (fMP4) :
+ * sans ce flag, AVPlayer calcule l'offset des échantillons vidéo par rapport
+ * au fragment précédent au lieu du moof, ce qui déphase les NAL units et
+ * provoque un écran noir avec le son seul.
+ */
+function patchDefaultBaseIsMoof(buf: Uint8Array): Uint8Array {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let off = 0;
+  while (off < buf.byteLength - 8) {
+    if (buf.byteLength - off < 8) break;
+    const len = view.getUint32(off);
+    if (len === 0 || len === 1 || len > buf.byteLength - off) break;
+    const type = String.fromCharCode(buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]);
+    if (type === 'moof') {
+      let trafOff = off + 8;
+      const moofEnd = off + len;
+      while (trafOff < moofEnd - 8) {
+        const trafLen = view.getUint32(trafOff);
+        if (trafLen === 0 || trafLen > moofEnd - trafOff) break;
+        const trafType = String.fromCharCode(buf[trafOff + 4], buf[trafOff + 5], buf[trafOff + 6], buf[trafOff + 7]);
+        if (trafType === 'traf') {
+          let boxOff = trafOff + 8;
+          const trafEnd = trafOff + trafLen;
+          while (boxOff < trafEnd - 8) {
+            const bLen = view.getUint32(boxOff);
+            if (bLen === 0 || bLen > trafEnd - boxOff) break;
+            const bType = String.fromCharCode(buf[boxOff + 4], buf[boxOff + 5], buf[boxOff + 6], buf[boxOff + 7]);
+            if (bType === 'tfhd') {
+              // tfhd: [4b size][4b 'tfhd'][1b version][3b flags]...
+              // default-base-is-moof est 0x020000 (bit 1 du 1er octet de flags)
+              buf[boxOff + 9] |= 0x02;
+            }
+            boxOff += bLen;
+          }
+        }
+        trafOff += trafLen;
+      }
+    }
+    off += len;
+  }
+  return buf;
+}
+
+/**
+ * Patch le header ftyp de l'initSegment pour inclure les marques compatibles 'iso6' et 'mp42'.
+ * Indique explicitement à AVPlayer qu'il s'agit d'un fragmented MP4 compatible ISO-6.
+ */
+function patchFtypHeader(initSegment: Uint8Array): Uint8Array {
+  if (initSegment.byteLength < 16) return initSegment;
+  const view = new DataView(initSegment.buffer, initSegment.byteOffset, initSegment.byteLength);
+  const ftypLen = view.getUint32(0);
+  const ftypType = String.fromCharCode(initSegment[4], initSegment[5], initSegment[6], initSegment[7]);
+  if (ftypType !== 'ftyp') return initSegment;
+
+  // Marques supplémentaires à ajouter : 'iso6' (69 73 6f 36) et 'mp42' (6d 70 34 32)
+  const extraBrands = [0x69, 0x73, 0x6f, 0x36, 0x6d, 0x70, 0x34, 0x32];
+  const newFtypLen = ftypLen + extraBrands.length;
+  const newInit = new Uint8Array(initSegment.byteLength + extraBrands.length);
+
+  // Copie le ftyp original avec nouvelle taille
+  newInit.set(initSegment.subarray(0, ftypLen), 0);
+  const newView = new DataView(newInit.buffer);
+  newView.setUint32(0, newFtypLen);
+
+  // Ajoute les marques supplémentaires
+  newInit.set(extraBrands, ftypLen);
+
+  // Copie le reste (le box moov)
+  newInit.set(initSegment.subarray(ftypLen), newFtypLen);
+  return newInit;
 }
 
 /**
@@ -260,9 +334,52 @@ export async function downloadHlsOffline(
 
   const qualityLabel = pickedVariant ? variantLabel(pickedVariant) : OFFLINE_QUALITY_LABEL[quality];
 
-  // 2. Téléchargement concurrent des segments MPEG-TS en cache temporaire
+  // 2. Pré-scan des segments temporaires existants pour reprise exacte
+  const existingValidSegments = new Set<number>();
   let segmentsDone = 0;
   let bytesDownloaded = 0;
+
+  for (let i = 0; i < segments.length; i++) {
+    const segName = `tmp_seg_${String(i).padStart(5, '0')}.ts`;
+    const segFile = new File(dir, segName);
+    if (segFile.exists) {
+      if (segFile.size >= 188) {
+        // Valide le magic byte MPEG-TS (0x47)
+        let valid = false;
+        try {
+          const handle = segFile.open(FileMode.ReadOnly);
+          try {
+            const head = handle.readBytes(1);
+            if (head.byteLength > 0 && head[0] === 0x47) {
+              valid = true;
+            }
+          } finally {
+            handle.close();
+          }
+        } catch {
+          valid = false;
+        }
+
+        if (valid) {
+          existingValidSegments.add(i);
+          segmentsDone++;
+          bytesDownloaded += segFile.size;
+        } else {
+          try {
+            segFile.delete();
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        try {
+          segFile.delete();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
 
   const report = () => {
     onProgress?.({
@@ -272,6 +389,7 @@ export async function downloadHlsOffline(
     });
   };
 
+  // Notifie immédiatement la progression réelle déjà présente (ex: 50% au lieu de 0%)
   report();
 
   let cursor = 0;
@@ -281,23 +399,21 @@ export async function downloadHlsOffline(
       if (idx >= segments.length) return;
       throwIfAborted();
 
+      if (existingValidSegments.has(idx)) {
+        continue;
+      }
+
       const segName = `tmp_seg_${String(idx).padStart(5, '0')}.ts`;
       const segFile = new File(dir, segName);
 
-      if (segFile.exists && segFile.size > 0) {
-        segmentsDone++;
-        bytesDownloaded += segFile.size;
-        report();
-      } else {
-        const segData = await downloadBytes(segments[idx].uri, signal);
-        if (segData.byteLength === 0 || segData[0] !== 0x47) {
-          throw new Error(`Segment ${idx + 1}/${segments.length} invalide`);
-        }
-        segFile.write(segData);
-        segmentsDone++;
-        bytesDownloaded += segData.byteLength;
-        report();
+      const segData = await downloadBytes(segments[idx].uri, signal);
+      if (segData.byteLength === 0 || segData[0] !== 0x47) {
+        throw new Error(`Segment ${idx + 1}/${segments.length} invalide`);
       }
+      segFile.write(segData);
+      segmentsDone++;
+      bytesDownloaded += segData.byteLength;
+      report();
     }
   };
 
@@ -320,16 +436,19 @@ export async function downloadHlsOffline(
   finalMp4File.create({ intermediates: true, overwrite: true });
   const handle = finalMp4File.open(FileMode.Append);
 
-  const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+  // keepOriginalTimestamps: false aligne le premier sample à 0:00:00.000 pour éviter tout offset noir
+  const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: false });
   let initWritten = false;
 
   transmuxer.on('data', segment => {
     if (!initWritten && segment.initSegment) {
-      handle.writeBytes(segment.initSegment);
+      const patchedInit = patchFtypHeader(segment.initSegment);
+      handle.writeBytes(patchedInit);
       initWritten = true;
     }
     if (segment.data) {
-      handle.writeBytes(segment.data);
+      const patchedData = patchDefaultBaseIsMoof(segment.data);
+      handle.writeBytes(patchedData);
     }
   });
 
@@ -343,12 +462,10 @@ export async function downloadHlsOffline(
         const data = segFile.bytesSync();
         transmuxer.push(data);
         transmuxer.flush();
-        // Suppression immédiate du segment source pour libérer le stockage
-        try {
-          segFile.delete();
-        } catch {
-          /* ignore */
-        }
+      }
+      // Cède un tick au runtime JS pour garder l'UI réactive
+      if (i % 8 === 0) {
+        await sleep(1, signal);
       }
     }
   } finally {
@@ -359,6 +476,19 @@ export async function downloadHlsOffline(
   // Vérification de sécurité du fichier final généré
   if (!finalMp4File.exists || finalMp4File.size < 1024) {
     throw new Error('Échec de la génération du fichier vidéo MP4');
+  }
+
+  // Nettoyage des segments temporaires UNIQUEMENT après succès confirmé
+  for (let i = 0; i < segments.length; i++) {
+    const segName = `tmp_seg_${String(i).padStart(5, '0')}.ts`;
+    const segFile = new File(dir, segName);
+    if (segFile.exists) {
+      try {
+        segFile.delete();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   return {

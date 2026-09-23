@@ -212,7 +212,8 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         signal: abort.signal,
         onProgress: p => {
           const now = Date.now();
-          if (now - lastReport < 400 && p.segmentsDone < (p.segmentsTotal || 0)) return;
+          // Ne pas throttler le premier rapport reçu (permet de refléter immédiatement la reprise exacte)
+          if (lastReport !== 0 && now - lastReport < 350 && p.segmentsDone < (p.segmentsTotal || 0)) return;
           lastReport = now;
           patch(next.key, {
             progress: p.segmentsTotal > 0 ? p.segmentsDone / p.segmentsTotal : 0,
@@ -246,17 +247,18 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         /* ignore */
       }
     } catch (e: any) {
-      const stillActive =
-        downloadsRef.current.find(r => r.key === next.key)?.status === 'downloading';
+      const isAborted = abort.signal.aborted || e?.name === 'AbortError' || e?.message === 'Aborted';
       if (quotaHit) {
         patch(next.key, { status: 'error', error: 'Quota de 8 Go dépassé — supprimez un téléchargement' });
-      } else if (abort.signal.aborted && stillActive) {
+      } else if (isAborted) {
         patch(next.key, { status: 'paused' });
-      } else if (e?.name !== 'AbortError') {
+      } else {
         patch(next.key, { status: 'error', error: friendlyDownloadError(e) });
       }
     } finally {
-      activeRef.current = null;
+      if (activeRef.current?.key === next.key) {
+        activeRef.current = null;
+      }
       // Enchaîne le suivant.
       setTimeout(() => pumpRef.current(), 300);
     }
@@ -355,10 +357,9 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
 
   const pauseDownload = useCallback(
     (key: string) => {
+      patch(key, { status: 'paused', autoPaused: false });
       if (activeRef.current?.key === key) {
         activeRef.current.abort.abort();
-      } else {
-        patch(key, { status: 'paused', autoPaused: false });
       }
     },
     [patch]
@@ -366,6 +367,10 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
 
   const resumeDownload = useCallback(
     (key: string) => {
+      if (activeRef.current?.key === key) {
+        activeRef.current.abort.abort();
+        activeRef.current = null;
+      }
       patch(key, { status: 'queued', error: null, autoPaused: false });
     },
     [patch]
