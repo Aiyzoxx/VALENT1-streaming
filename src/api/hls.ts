@@ -77,26 +77,36 @@ export async function resolveVariantUrl(masterUrl: string, timeoutMs = 10000): P
 const streamUrlCache = new Map<string, string>();
 
 /**
- * Vérifie si une master playlist contient des balises EXT-X-MEDIA non conformes
- * rejetées par AVPlayer iOS (ex: URI pointant directement vers .vtt au lieu d'une
- * sous-playlist .m3u8, provoquant CoreMediaErrorDomain -12646).
+ * Vérifie si une master playlist contient des balises EXT-X-MEDIA non conformes ou conflictuelles
+ * (ex: URI pointant directement vers .vtt provoquant CoreMediaErrorDomain -12646,
+ * ou piste audio externe séparée provoquant le doublement de durée 45:09 et blocage du seek sur AVPlayer).
  */
 export function hasIncompatibleMediaTags(manifestText: string): boolean {
-  return /#EXT-X-MEDIA:TYPE=SUBTITLES[^\n]+URI="[^"]+\.vtt"/i.test(manifestText);
+  const hasVttSubs = /#EXT-X-MEDIA:TYPE=SUBTITLES[^\n]+URI="[^"]+\.vtt"/i.test(manifestText);
+  const hasSeparateAudio = /#EXT-X-MEDIA:TYPE=AUDIO[^\n]+URI="[^"]+\.m3u8"/i.test(manifestText);
+  return hasVttSubs || hasSeparateAudio;
 }
 
 /**
  * Résout une URL de flux vers une URL 100% jouable sur AVPlayer iOS.
- * Si le flux est une master playlist avec tags non conformes (ex: MobLand),
+ * Si le flux est une master playlist avec tags non conformes ou audio séparé (ex: Malcolm, MobLand),
  * bascule préventivement sur la meilleure variante vidéo directe.
- * Si le flux est déjà conforme (ex: Evil Dead Burn) ou direct, le renvoie sans modification.
+ * Si le flux est déjà conforme ou direct, le renvoie sans modification.
  */
-export async function resolvePlayableStreamUrl(streamUrl: string, timeoutMs = 4000): Promise<string> {
+export async function resolvePlayableStreamUrl(streamUrl: string, timeoutMs = 6000): Promise<string> {
   if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
   if (!streamUrl.includes('.m3u8')) return streamUrl;
 
   const cached = streamUrlCache.get(streamUrl);
   if (cached) return cached;
+
+  // Résolution déterministe immédiate (0ms) pour les séries finepulfe (ex: Malcolm) :
+  // Évite les timeouts réseau 4G/WiFi, élimine la durée doublée à 45:09 et débloque le seek
+  if (streamUrl.includes('finepulfe.xyz') && /\/tv\/[^\/]+\/S\d+\/E\d+\/master\.m3u8/i.test(streamUrl)) {
+    const directVariant = streamUrl.replace(/\/master\.m3u8$/i, '/720p/playlist.m3u8');
+    streamUrlCache.set(streamUrl, directVariant);
+    return directVariant;
+  }
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -118,6 +128,7 @@ export async function resolvePlayableStreamUrl(streamUrl: string, timeoutMs = 40
     }
 
     // Détection des anomalies connues pour faire crasher AVPlayer iOS (-12646)
+    // ou additionner la durée audio/vidéo (ex: 45:09 au lieu de 22:34)
     if (hasIncompatibleMediaTags(text)) {
       const variant = pickVariantUrl(text, streamUrl);
       if (variant) {

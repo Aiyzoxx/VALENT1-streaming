@@ -10,6 +10,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Animated,
+  useWindowDimensions,
 } from 'react-native';
 import { useVideoPlayer, VideoView, VideoContentFit, AudioTrack, SubtitleTrack, ContentType } from 'expo-video';
 import { useEvent } from 'expo';
@@ -109,8 +110,11 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   onProgressUpdate,
 }) => {
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isLandscapeWindow = windowWidth > windowHeight;
+
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(isLandscapeWindow);
   const [contentFit, setContentFit] = useState<VideoContentFit>('contain');
   const [showSettings, setShowSettings] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('quality');
@@ -121,6 +125,11 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [scrubValue, setScrubValue] = useState(0);
   const [currentTimeState, setCurrentTimeState] = useState(initialTime);
+
+  // Verrouillage de l'affichage pendant la recherche réseau asynchrone (évite le snap-back à 0:22)
+  const isSeekingRef = useRef(false);
+  const seekTargetRef = useRef<number | null>(null);
+  const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const videoViewRef = useRef<any>(null);
   const hideControlsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -147,19 +156,29 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   // (fichier direct ou servi via le serveur HTTP local 127.0.0.1)
   const isLocalFile =
     isLocalFileProp ?? (streamUrl.startsWith('file:') || streamUrl.includes('127.0.0.1') || streamUrl.endsWith('.mp4'));
-  const [activeUri, setActiveUri] = useState(streamUrl);
+
+  // Résolution synchrone immédiate (0ms) pour les séries finepulfe (ex: Malcolm)
+  // Permet de démarrer directement sur la variante 720p (durée exacte 22:34 et VF/VO muxées)
+  const initialUri = useMemo(() => {
+    if (!isLocalFile && streamUrl.includes('finepulfe.xyz') && /\/tv\/[^\/]+\/S\d+\/E\d+\/master\.m3u8/i.test(streamUrl)) {
+      return streamUrl.replace(/\/master\.m3u8$/i, '/720p/playlist.m3u8');
+    }
+    return streamUrl;
+  }, [streamUrl, isLocalFile]);
+
+  const [activeUri, setActiveUri] = useState(initialUri);
   const [fallbackTried, setFallbackTried] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [loadTimedOut, setLoadTimedOut] = useState(false);
 
   useEffect(() => {
-    setActiveUri(streamUrl);
+    setActiveUri(initialUri);
     setFallbackTried(false);
     setUsingFallback(false);
     setLoadTimedOut(false);
     setIsRetrying(false);
-  }, [streamUrl]);
+  }, [initialUri]);
 
   const videoSource = useMemo(
     () => ({
@@ -172,6 +191,8 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const player = useVideoPlayer(videoSource, p => {
     try {
       p.loop = false;
+      // Tolérance de 2s : accroche le keyframe le plus proche instantanément sans bloquer le décodeur HLS
+      p.seekTolerance = { toleranceBefore: 2, toleranceAfter: 2 };
     } catch (e) {
       console.warn('Error setup player:', e);
     }
@@ -315,18 +336,24 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   }, [availableAudioTracks]);
 
   // ── Orientation / rotation automatique / auto-hide ───────────────────────
+  // Réagit immédiatement aux changements de dimensions de la fenêtre (rotation physique du téléphone)
+  useEffect(() => {
+    setIsFullscreen(isLandscapeWindow);
+  }, [isLandscapeWindow]);
+
   useEffect(() => {
     let isMounted = true;
-    // Déverrouille l'orientation à l'ouverture du lecteur pour permettre la rotation libre au gyroscope
+    // Déverrouille et autorise toutes les orientations pour permettre la rotation fluide au gyroscope
     ScreenOrientation.unlockAsync().catch(() => {});
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.DEFAULT).catch(() => {});
 
-    // Détecte l'orientation au lancement
+    // Détecte l'orientation initiale
     ScreenOrientation.getOrientationAsync().then(o => {
       if (!isMounted) return;
       const isLandscape =
         o === ScreenOrientation.Orientation.LANDSCAPE_LEFT ||
         o === ScreenOrientation.Orientation.LANDSCAPE_RIGHT;
-      setIsFullscreen(isLandscape);
+      setIsFullscreen(isLandscape || isLandscapeWindow);
     }).catch(() => {});
 
     // Bascule automatiquement en plein écran paysage ou portrait selon l'orientation physique du téléphone
@@ -346,14 +373,25 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       } catch (_) {}
     };
-  }, []);
+  }, [isLandscapeWindow]);
 
   useEffect(() => {
     const interval = setInterval(() => {
       if (player && !isScrubbing) {
         const curr = player.currentTime;
-        setCurrentTimeState(curr);
-        if (onProgressUpdate && player.duration > 0) onProgressUpdate(curr, player.duration);
+        if (isSeekingRef.current) {
+          // Pendant le chargement du nouveau segment distant, on attend que le lecteur
+          // ait réellement atteint la position demandée avant de synchroniser le curseur
+          if (seekTargetRef.current !== null && Math.abs(curr - seekTargetRef.current) < 2.5) {
+            isSeekingRef.current = false;
+            seekTargetRef.current = null;
+            setCurrentTimeState(curr);
+            if (onProgressUpdate && player.duration > 0) onProgressUpdate(curr, player.duration);
+          }
+        } else {
+          setCurrentTimeState(curr);
+          if (onProgressUpdate && player.duration > 0) onProgressUpdate(curr, player.duration);
+        }
       }
     }, 500);
     return () => clearInterval(interval);
@@ -409,6 +447,15 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     haptic(Haptics.ImpactFeedbackStyle.Light);
     if (!player) return;
     try {
+      const target = Math.max(0, Math.min(duration || 99999, currentTimeState + seconds));
+      isSeekingRef.current = true;
+      seekTargetRef.current = target;
+      setCurrentTimeState(target);
+      if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
+      seekTimeoutRef.current = setTimeout(() => {
+        isSeekingRef.current = false;
+        seekTargetRef.current = null;
+      }, 3000);
       player.seekBy(seconds);
     } catch (e) {
       console.warn('Erreur seekBy:', e);
@@ -425,8 +472,10 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
       } else {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
         setIsFullscreen(false);
-        // Redéverrouille pour réactiver la rotation auto libre
-        await ScreenOrientation.unlockAsync();
+        // Réactive la rotation libre au gyroscope après le retour en portrait
+        setTimeout(() => {
+          ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.DEFAULT).catch(() => {});
+        }, 500);
       }
     } catch (e) {
       console.warn('Erreur orientation plein écran:', e);
@@ -556,8 +605,9 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const live = isLive || (player?.isLive === true && status !== 'error');
   const shownTime = isScrubbing ? scrubValue : currentTimeState;
 
-  const topPad = Math.max(insets.top, Platform.OS === 'ios' ? 44 : 20);
-  const bottomPad = Math.max(insets.bottom, Platform.OS === 'ios' ? 20 : 12);
+  const topPad = Math.max(insets.top, Platform.OS === 'ios' ? (isFullscreen || isLandscapeWindow ? 16 : 44) : 20);
+  const bottomPad = Math.max(insets.bottom, Platform.OS === 'ios' ? (isFullscreen || isLandscapeWindow ? 16 : 20) : 12);
+  const sidePad = Math.max(insets.left, insets.right, 20);
 
   return (
     <View style={styles.container}>
@@ -615,7 +665,16 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
             />
 
             {/* ── Barre haute ── */}
-            <Animated.View style={[styles.topBar, { paddingTop: topPad, transform: [{ translateY: topBarSlide }] }]}>
+            <Animated.View
+              style={[
+                styles.topBar,
+                {
+                  paddingTop: topPad,
+                  paddingHorizontal: isFullscreen || isLandscapeWindow ? sidePad : THEME.spacing.lg,
+                  transform: [{ translateY: topBarSlide }],
+                },
+              ]}
+            >
               <TouchableOpacity style={styles.glassBtn} onPress={handleExit} activeOpacity={0.8}>
                 <Ionicons name="close" size={20} color={THEME.colors.textPrimary} />
               </TouchableOpacity>
@@ -673,7 +732,16 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
             </View>
 
             {/* ── Barre basse ── */}
-            <Animated.View style={[styles.bottomBar, { paddingBottom: bottomPad, transform: [{ translateY: bottomBarSlide }] }]}>
+            <Animated.View
+              style={[
+                styles.bottomBar,
+                {
+                  paddingBottom: bottomPad,
+                  paddingHorizontal: isFullscreen || isLandscapeWindow ? sidePad : THEME.spacing.lg,
+                  transform: [{ translateY: bottomBarSlide }],
+                },
+              ]}
+            >
               {!live && duration > 0 && (
                 <View style={styles.scrubRow}>
                   <Text style={styles.timeText}>{formatTime(shownTime)}</Text>
@@ -689,6 +757,14 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                     onSlidingComplete={val => {
                       setIsScrubbing(false);
                       setCurrentTimeState(val);
+                      isSeekingRef.current = true;
+                      seekTargetRef.current = val;
+                      if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
+                      seekTimeoutRef.current = setTimeout(() => {
+                        isSeekingRef.current = false;
+                        seekTargetRef.current = null;
+                      }, 3000);
+
                       if (player) {
                         try {
                           player.currentTime = val;

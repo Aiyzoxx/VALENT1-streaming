@@ -114,7 +114,7 @@ function GatedApp() {
 function MainApp({ initialTab }: { initialTab: TabType }) {
   const insets = useSafeAreaInsets();
   const { user, token, logout } = useAuth();
-  const { getLocalUri, verifyLocal, toServeUrl } = useDownloads();
+  const { getLocalUri, verifyLocal, toServeUrl, getRecord } = useDownloads();
   // Bascule auto vers la page hors-ligne quand la connexion tombe.
   const isOffline = useIsOffline();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
@@ -191,15 +191,17 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
       return;
     }
     const playableUrl = localUri ?? (await resolvePlayableStreamUrl(episode ? episode.streamUrl : item.streamUrl));
+    const dlRec = localUri ? getRecord(item.id, episode?.id) : null;
 
     setActiveStream({
       streamUrl: playableUrl,
       title: item.title,
-      subtitle: episode ? `${episode.title} (${episode.duration})` : undefined,
+      subtitle: episode ? (episode.duration ? `${episode.title} (${episode.duration})` : episode.title) : undefined,
       initialTime,
       isLive: item.type === 'live',
       isLocalFile: !!localUri,
       mediaId: progressKey,
+      expectedDuration: dlRec?.duration,
     });
   };
 

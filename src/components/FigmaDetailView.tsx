@@ -277,7 +277,7 @@ export const FigmaDetailView: React.FC<FigmaDetailViewProps> = ({
           season: sNum,
           episodeNumber: eNum,
           title: epTitle,
-          duration: '45m',
+          duration: '',
           synopsis: `Épisode ${eNum} de la saison ${sNum}`,
           streamUrl: ep.url,
           thumbnailUrl: item.backdropUrl || item.posterUrl,
