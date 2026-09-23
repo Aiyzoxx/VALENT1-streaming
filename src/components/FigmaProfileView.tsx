@@ -319,7 +319,7 @@ export const FigmaProfileView: React.FC<FigmaProfileViewProps> = ({
               <View style={styles.dlQuotaRow}>
                 <Ionicons name="save-outline" size={15} color={THEME.colors.textMuted} />
                 <Text style={styles.dlQuotaText}>
-                  {formatBytes(totalBytes)} / {formatBytes(OFFLINE_QUOTA_BYTES)} · WiFi uniquement
+                  {formatBytes(totalBytes)} / {formatBytes(OFFLINE_QUOTA_BYTES)}
                 </Text>
               </View>
               {downloads.length > 0 ? (

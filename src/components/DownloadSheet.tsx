@@ -90,8 +90,8 @@ export const DownloadSheet: React.FC<DownloadSheetProps> = ({
         ))}
 
         <View style={styles.wifiNote}>
-          <Ionicons name="wifi" size={15} color={THEME.colors.textMuted} />
-          <Text style={styles.wifiText}>WiFi uniquement · quota de 8 Go · reprise auto</Text>
+          <Ionicons name="cloud-download-outline" size={15} color={THEME.colors.textMuted} />
+          <Text style={styles.wifiText}>Téléchargement hors-ligne · quota de 8 Go · reprise auto</Text>
         </View>
       </Animated.View>
     </Animated.View>

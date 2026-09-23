@@ -70,7 +70,7 @@ export const OfflineView: React.FC<OfflineViewProps> = ({ onPlayDownload }) => {
 
         {pending.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>En attente de WiFi ({pending.length})</Text>
+            <Text style={styles.sectionTitle}>En cours ou en pause ({pending.length})</Text>
             {pending.map(rec => (
               <DownloadCard
                 key={rec.key}

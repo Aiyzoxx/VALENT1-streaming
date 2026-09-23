@@ -662,7 +662,7 @@ const AnimatedEpisodeCard: React.FC<{
               size={15}
               color="#FFFFFF"
             />
-            {(dlRec?.status === 'downloading' || dlRec?.status === 'queued') && (
+            {(dlRec?.status === 'downloading' || dlRec?.status === 'queued' || dlRec?.status === 'paused') && (
               <Text style={styles.epDlPct}>{Math.round((dlRec.progress || 0) * 100)}%</Text>
             )}
           </TouchableOpacity>
@@ -680,7 +680,7 @@ function dlIconFor(rec: DownloadRecord | undefined): keyof typeof Ionicons.glyph
     case 'queued':
       return 'pause';
     case 'paused':
-      return 'arrow-down';
+      return 'play';
     case 'done':
       return 'checkmark-circle';
     case 'error':
@@ -699,7 +699,7 @@ const DlCircleButton: React.FC<{
       size={22}
       color="#FFFFFF"
     />
-    {(rec?.status === 'downloading' || rec?.status === 'queued') && (
+    {(rec?.status === 'downloading' || rec?.status === 'queued' || rec?.status === 'paused') && (
       <Text style={styles.dlPct}>{Math.round((rec.progress || 0) * 100)}%</Text>
     )}
   </TouchableOpacity>

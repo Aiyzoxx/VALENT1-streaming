@@ -166,10 +166,10 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     [downloads]
   );
 
-  const isWifi = useCallback(async (): Promise<boolean> => {
+  const isOnline = useCallback(async (): Promise<boolean> => {
     try {
       const state = await Network.getNetworkStateAsync();
-      return state.type === Network.NetworkStateType.WIFI;
+      return state.isConnected !== false && state.isInternetReachable !== false;
     } catch {
       return true;
     }
@@ -181,8 +181,8 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     const next = downloadsRef.current.find(r => r.status === 'queued');
     if (!next) return;
 
-    if (!(await isWifi())) {
-      patch(next.key, { status: 'paused', autoPaused: true, error: 'En attente du WiFi' });
+    if (!(await isOnline())) {
+      patch(next.key, { status: 'paused', autoPaused: true, error: 'En attente de connexion' });
       return;
     }
     if (usedBytesOf(downloadsRef.current) + START_ESTIMATE_BYTES > OFFLINE_QUOTA_BYTES) {
@@ -260,7 +260,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       // Enchaîne le suivant.
       setTimeout(() => pumpRef.current(), 300);
     }
-  }, [loaded, isWifi, patch]);
+  }, [loaded, isOnline, patch]);
 
   const pumpRef = useRef(pump);
   pumpRef.current = pump;
@@ -269,15 +269,15 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     if (loaded) pump();
   }, [loaded, downloads, pump]);
 
-  // ── WiFi : pause auto en cellulaire, reprise auto au retour ────────────────
+  // ── Réseau : pause auto si perte de connexion, reprise auto au retour ────
   useEffect(() => {
     const sub = Network.addNetworkStateListener(state => {
-      const wifi = state.type === Network.NetworkStateType.WIFI;
-      if (!wifi && activeRef.current) {
+      const online = state.isConnected !== false && state.isInternetReachable !== false;
+      if (!online && activeRef.current) {
         const rec = downloadsRef.current.find(r => r.key === activeRef.current?.key);
         activeRef.current.abort.abort();
-        if (rec) patch(rec.key, { status: 'paused', autoPaused: true, error: 'En attente du WiFi' });
-      } else if (wifi) {
+        if (rec) patch(rec.key, { status: 'paused', autoPaused: true, error: 'En attente de connexion' });
+      } else if (online) {
         const waiting = downloadsRef.current.find(r => r.status === 'paused' && r.autoPaused);
         if (waiting) {
           patch(waiting.key, { status: 'queued', autoPaused: false, error: null });
@@ -330,7 +330,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
           ? episode.thumbnailUrl || media.backdropUrl || media.posterUrl || null
           : media.posterUrl ?? null,
         localCoverUri: existing?.localCoverUri ?? null,
-        remoteUrl: episode?.streamUrl ?? media.streamUrl,
+        remoteUrl: (episode?.streamUrl && episode.streamUrl.trim() !== '') ? episode.streamUrl : media.streamUrl,
         quality,
         qualityLabel: OFFLINE_QUALITY_LABEL[quality],
         status: 'queued',
@@ -445,9 +445,9 @@ function friendlyDownloadError(e: any): string {
   if (/live non supporté/i.test(msg)) return 'Direct non téléchargeable';
   if (/Playlist vide/i.test(msg)) return 'Flux illisible — réessayez plus tard';
   if (/HTTP (\d+)/.test(msg)) return 'Serveur injoignable — réessayez plus tard';
-  if (/Timeout|trop lente/i.test(msg)) return 'Connexion trop lente — réessayez en WiFi stable';
+  if (/Timeout|trop lente/i.test(msg)) return 'Connexion trop lente — réessayez plus tard';
   if (/illisible|invalide/i.test(msg)) return 'Réponse serveur invalide — réessayez plus tard';
-  if (/Network|fetch|Failed to fetch/i.test(msg)) return 'Connexion perdue — reprendra en WiFi';
+  if (/Network|fetch|Failed to fetch/i.test(msg)) return 'Connexion perdue — reprise automatique au retour du réseau';
   return 'Échec du téléchargement — réessayez';
 }
 
