@@ -21,7 +21,14 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import { Directory, File, Paths } from 'expo-file-system';
-import { downloadHlsOffline, downloadCover, probeLocalBundle, OfflineQuality, OFFLINE_QUALITY_LABEL } from '../api/hlsOffline';
+import {
+  downloadHlsOffline,
+  downloadCover,
+  probeLocalBundle,
+  repairExistingMp4,
+  OfflineQuality,
+  OFFLINE_QUALITY_LABEL,
+} from '../api/hlsOffline';
 import { MediaItem, Episode } from '../types/media';
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'done' | 'error';
@@ -48,6 +55,8 @@ export interface DownloadRecord {
   error: string | null;
   autoPaused: boolean;
   createdAt: number;
+  /** Durée réelle du flux en secondes (évite tout débordement 25h fMP4) */
+  duration?: number;
 }
 
 interface DownloadsContextValue {
@@ -135,21 +144,31 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       setDownloads(list);
       setLoaded(true);
       await persist(list);
-      // Rattrapage des covers manquantes (anciens téléchargements) — silencieux.
+      // Rattrapage des covers manquantes et réparation de la durée fMP4 (anciens téléchargements).
       for (const r of list) {
         if (!alive) break;
-        if (r.status !== 'done' || r.localCoverUri || !r.posterUrl) continue;
-        try {
-          const cover = await downloadCover(r.posterUrl, offlineDir(r.key));
-          if (cover && alive) {
-            setDownloads(prev => {
-              const next = prev.map(x => (x.key === r.key ? { ...x, localCoverUri: cover } : x));
-              persist(next);
-              return next;
-            });
+        if (r.status !== 'done') continue;
+        if (r.localUri) {
+          try {
+            const f = new File(r.localUri);
+            repairExistingMp4(f, r.duration);
+          } catch {
+            /* ignore */
           }
-        } catch {
-          /* ignore */
+        }
+        if (!r.localCoverUri && r.posterUrl) {
+          try {
+            const cover = await downloadCover(r.posterUrl, offlineDir(r.key));
+            if (cover && alive) {
+              setDownloads(prev => {
+                const next = prev.map(x => (x.key === r.key ? { ...x, localCoverUri: cover } : x));
+                persist(next);
+                return next;
+              });
+            }
+          } catch {
+            /* ignore */
+          }
         }
       }
     })();
@@ -237,6 +256,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         localUri: result.localUri,
         qualityLabel: result.qualityLabel,
         remoteUrl: freshUrl,
+        duration: result.duration,
         error: null,
       });
       // Cover locale (best-effort, après le marquage done pour ne pas bloquer).
@@ -400,7 +420,17 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     (key: string): boolean => {
       const rec = downloadsRef.current.find(r => r.key === key);
       if (!rec) return false;
-      if (bundleComplete(rec.localUri)) return true;
+      if (bundleComplete(rec.localUri)) {
+        if (rec.localUri) {
+          try {
+            const f = new File(rec.localUri);
+            repairExistingMp4(f, rec.duration);
+          } catch {
+            /* ignore */
+          }
+        }
+        return true;
+      }
       patch(key, {
         status: 'error',
         error: 'Fichier incomplet — relancez le téléchargement',

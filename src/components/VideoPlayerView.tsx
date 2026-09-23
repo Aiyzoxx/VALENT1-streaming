@@ -32,6 +32,8 @@ interface VideoPlayerViewProps {
   isLocalFile?: boolean;
   onClose: () => void;
   onProgressUpdate?: (currentTime: number, duration: number) => void;
+  /** Durée attendue en secondes (fournie par les métadonnées hors-ligne) */
+  expectedDuration?: number;
 }
 
 type SettingsTab = 'quality' | 'speed' | 'audio';
@@ -46,9 +48,10 @@ const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 const formatTime = (seconds: number): string => {
   if (isNaN(seconds) || seconds < 0) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
+  const totalSec = Math.floor(seconds);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
   if (h > 0) return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
 };
@@ -101,6 +104,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   initialTime = 0,
   isLive = false,
   isLocalFile: isLocalFileProp,
+  expectedDuration,
   onClose,
   onProgressUpdate,
 }) => {
@@ -310,9 +314,34 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     });
   }, [availableAudioTracks]);
 
-  // ── Orientation / progression / auto-hide ────────────────────────────────
+  // ── Orientation / rotation automatique / auto-hide ───────────────────────
   useEffect(() => {
+    let isMounted = true;
+    // Déverrouille l'orientation à l'ouverture du lecteur pour permettre la rotation libre au gyroscope
+    ScreenOrientation.unlockAsync().catch(() => {});
+
+    // Détecte l'orientation au lancement
+    ScreenOrientation.getOrientationAsync().then(o => {
+      if (!isMounted) return;
+      const isLandscape =
+        o === ScreenOrientation.Orientation.LANDSCAPE_LEFT ||
+        o === ScreenOrientation.Orientation.LANDSCAPE_RIGHT;
+      setIsFullscreen(isLandscape);
+    }).catch(() => {});
+
+    // Bascule automatiquement en plein écran paysage ou portrait selon l'orientation physique du téléphone
+    const subscription = ScreenOrientation.addOrientationChangeListener(event => {
+      if (!isMounted) return;
+      const o = event.orientationInfo.orientation;
+      const isLandscape =
+        o === ScreenOrientation.Orientation.LANDSCAPE_LEFT ||
+        o === ScreenOrientation.Orientation.LANDSCAPE_RIGHT;
+      setIsFullscreen(isLandscape);
+    });
+
     return () => {
+      isMounted = false;
+      subscription.remove();
       try {
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
       } catch (_) {}
@@ -396,6 +425,8 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
       } else {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
         setIsFullscreen(false);
+        // Redéverrouille pour réactiver la rotation auto libre
+        await ScreenOrientation.unlockAsync();
       }
     } catch (e) {
       console.warn('Erreur orientation plein écran:', e);
@@ -503,7 +534,18 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   };
 
   // ── États dérivés ────────────────────────────────────────────────────────
-  const duration = player?.duration ?? 0;
+  const rawDuration = player?.duration ?? 0;
+  const isLocalPlayback = activeUri.startsWith('file:');
+  // Évite que la valeur 0xFFFFFFFF (~24h 51m = 89478s) ou 0 ne vienne corrompre le slider
+  const duration = useMemo(() => {
+    if (expectedDuration && expectedDuration > 0) {
+      if (rawDuration <= 0 || rawDuration > 72000) return expectedDuration;
+    }
+    if (isLocalPlayback && rawDuration > 72000) {
+      return expectedDuration && expectedDuration > 0 ? expectedDuration : 0;
+    }
+    return rawDuration;
+  }, [rawDuration, expectedDuration, isLocalPlayback]);
   const isError = ((status === 'error' && fallbackTried) || loadTimedOut) && !isRetrying;
   const isLoading =
     ((status === 'loading' || (status === 'error' && !fallbackTried)) || isRetrying) && !loadTimedOut;
@@ -512,7 +554,6 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     (loadTimedOut ? 'Délai dépassé sans image. Vérifiez la connexion.' : '');
   // Pas de badge DIRECT sur une erreur : durée inconnue ≠ live.
   const live = isLive || (player?.isLive === true && status !== 'error');
-  const isLocalPlayback = activeUri.startsWith('file:');
   const shownTime = isScrubbing ? scrubValue : currentTimeState;
 
   const topPad = Math.max(insets.top, Platform.OS === 'ios' ? 44 : 20);
@@ -647,6 +688,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
                     }}
                     onSlidingComplete={val => {
                       setIsScrubbing(false);
+                      setCurrentTimeState(val);
                       if (player) {
                         try {
                           player.currentTime = val;

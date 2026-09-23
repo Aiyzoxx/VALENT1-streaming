@@ -17,6 +17,7 @@ import * as Haptics from 'expo-haptics';
 // Data & Types
 import { CATALOG } from './src/data/catalog';
 import { MediaItem, Episode } from './src/types/media';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { THEME } from './src/constants/theme';
 
 // Hooks
@@ -53,9 +54,14 @@ interface ActiveStream {
   isLive?: boolean;
   isLocalFile?: boolean;
   mediaId?: string;
+  expectedDuration?: number;
 }
 
 export default function App() {
+  useEffect(() => {
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+  }, []);
+
   return (
     <SafeAreaProvider>
       <AuthProvider>
@@ -218,6 +224,7 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
       isLive: false,
       isLocalFile: true,
       mediaId: rec.episodeId ? `${rec.mediaId}_ep_${rec.episodeId}` : rec.mediaId,
+      expectedDuration: rec.duration,
     });
   };
 
@@ -242,6 +249,7 @@ function MainApp({ initialTab }: { initialTab: TabType }) {
             initialTime={activeStream.initialTime}
             isLive={activeStream.isLive}
             isLocalFile={activeStream.isLocalFile}
+            expectedDuration={activeStream.expectedDuration}
             onClose={() => setActiveStream(null)}
             onProgressUpdate={(curr, dur) => {
               if (activeStream.mediaId) {

@@ -55,7 +55,10 @@ export interface OfflineResult {
   bytesTotal: number;
   segments: number;
   qualityLabel: string;
+  /** Durée totale du flux en secondes */
+  duration: number;
 }
+
 
 function resolveUrl(uri: string, base: string): string {
   try {
@@ -423,6 +426,178 @@ function patchFtypHeader(initSegment: Uint8Array): Uint8Array {
 }
 
 /**
+ * Patch l'initSegment fMP4 :
+ * 1. Ajoute les marques 'iso6' et 'mp42' dans ftyp pour AVPlayer
+ * 2. Remplace 0xFFFFFFFF (qui donne ~25h aberrantes) par la vraie durée en ticks dans mvhd, tkhd, mdhd
+ * 3. Injecte une boîte mehd (Movie Extends Header) dans mvex pour déclarer la durée officielle du fMP4
+ */
+function patchInitSegment(initSegment: Uint8Array, totalDurationSec: number): Uint8Array {
+  const withFtyp = patchFtypHeader(initSegment);
+  if (totalDurationSec <= 0) return withFtyp;
+
+  const view = new DataView(withFtyp.buffer, withFtyp.byteOffset, withFtyp.byteLength);
+
+  let movieTimescale = 90000;
+  let mvhdDurationOff = -1;
+  const tkhdDurationOffsets: number[] = [];
+  const mdhdDurationEntries: Array<{ off: number; timescale: number }> = [];
+  let mvexOff = -1;
+  let mvexLen = -1;
+  let moovOff = -1;
+  let moovLen = -1;
+
+  function scan(start: number, end: number) {
+    let off = start;
+    while (off < end - 8) {
+      const len = view.getUint32(off);
+      if (len === 0 || len > end - off) break;
+      const type = String.fromCharCode(withFtyp[off + 4], withFtyp[off + 5], withFtyp[off + 6], withFtyp[off + 7]);
+
+      if (type === 'moov') {
+        moovOff = off;
+        moovLen = len;
+        scan(off + 8, off + len);
+      } else if (type === 'mvhd') {
+        movieTimescale = view.getUint32(off + 20);
+        mvhdDurationOff = off + 24;
+      } else if (type === 'trak' || type === 'mdia' || type === 'minf') {
+        scan(off + 8, off + len);
+      } else if (type === 'tkhd') {
+        tkhdDurationOffsets.push(off + 28);
+      } else if (type === 'mdhd') {
+        const ts = view.getUint32(off + 20);
+        mdhdDurationEntries.push({ off: off + 24, timescale: ts });
+      } else if (type === 'mvex') {
+        mvexOff = off;
+        mvexLen = len;
+      }
+      off += len;
+    }
+  }
+
+  scan(0, withFtyp.byteLength);
+
+  const movieDurationTicks = Math.round(totalDurationSec * movieTimescale);
+
+  if (mvexOff !== -1 && moovOff !== -1) {
+    const mehdLen = 16;
+    const out = new Uint8Array(withFtyp.byteLength + mehdLen);
+    const outView = new DataView(out.buffer);
+
+    const mvexHeaderEnd = mvexOff + 8;
+    out.set(withFtyp.subarray(0, mvexHeaderEnd), 0);
+
+    // Box mehd : size 16, type 'mehd', ver 0, flags 0, duration
+    outView.setUint32(mvexHeaderEnd, 16);
+    out[mvexHeaderEnd + 4] = 0x6d; // 'm'
+    out[mvexHeaderEnd + 5] = 0x65; // 'e'
+    out[mvexHeaderEnd + 6] = 0x68; // 'h'
+    out[mvexHeaderEnd + 7] = 0x64; // 'd'
+    outView.setUint32(mvexHeaderEnd + 8, 0); // ver=0, flags=0
+    outView.setUint32(mvexHeaderEnd + 12, movieDurationTicks);
+
+    out.set(withFtyp.subarray(mvexHeaderEnd), mvexHeaderEnd + mehdLen);
+
+    outView.setUint32(moovOff, moovLen + mehdLen);
+    outView.setUint32(mvexOff, mvexLen + mehdLen);
+
+    if (mvhdDurationOff !== -1) {
+      outView.setUint32(mvhdDurationOff, movieDurationTicks);
+    }
+    for (const tOff of tkhdDurationOffsets) {
+      outView.setUint32(tOff, movieDurationTicks);
+    }
+    for (const mEntry of mdhdDurationEntries) {
+      const dur = Math.round(totalDurationSec * mEntry.timescale);
+      outView.setUint32(mEntry.off, dur);
+    }
+
+    return out;
+  }
+
+  if (mvhdDurationOff !== -1) {
+    view.setUint32(mvhdDurationOff, movieDurationTicks);
+  }
+  for (const tOff of tkhdDurationOffsets) {
+    view.setUint32(tOff, movieDurationTicks);
+  }
+  for (const mEntry of mdhdDurationEntries) {
+    view.setUint32(mEntry.off, Math.round(totalDurationSec * mEntry.timescale));
+  }
+  return withFtyp;
+}
+
+/**
+ * Répare in-situ la durée d'un fichier video.mp4 déjà téléchargé
+ * en remplaçant la valeur par défaut 0xFFFFFFFF (qui donne ~25h aberrantes) dans mvhd, tkhd, mdhd.
+ */
+export function repairExistingMp4(file: File, expectedDurationSec?: number): boolean {
+  if (!file.exists || file.size < 1024) return false;
+  try {
+    const handle = file.open(FileMode.ReadWrite);
+    try {
+      const head = handle.readBytes(Math.min(file.size, 4096));
+      if (head.byteLength < 32) return false;
+      const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
+
+      let mvhdOff = -1;
+      let movieTimescale = 90000;
+      let mvhdDur = 0;
+      const tkhdOffsets: number[] = [];
+      const mdhdEntries: Array<{ off: number; timescale: number }> = [];
+
+      function scan(start: number, end: number) {
+        let p = start;
+        while (p < end - 8) {
+          const len = view.getUint32(p);
+          if (len === 0 || len > end - p) break;
+          const type = String.fromCharCode(head[p + 4], head[p + 5], head[p + 6], head[p + 7]);
+          if (type === 'moov' || type === 'trak' || type === 'mdia' || type === 'minf') {
+            scan(p + 8, p + len);
+          } else if (type === 'mvhd') {
+            mvhdOff = p;
+            movieTimescale = view.getUint32(p + 20);
+            mvhdDur = view.getUint32(p + 24);
+          } else if (type === 'tkhd') {
+            tkhdOffsets.push(p + 28);
+          } else if (type === 'mdhd') {
+            const ts = view.getUint32(p + 20);
+            mdhdEntries.push({ off: p + 24, timescale: ts });
+          }
+          p += len;
+        }
+      }
+
+      scan(0, head.byteLength);
+
+      // Si la durée est 0xFFFFFFFF ou aberrante (> 20h = 72000s)
+      if (mvhdOff !== -1 && (mvhdDur === 0xffffffff || mvhdDur > 72000 * movieTimescale)) {
+        const durSec = expectedDurationSec && expectedDurationSec > 0 ? expectedDurationSec : 1320;
+        const durTicks = Math.round(durSec * movieTimescale);
+        view.setUint32(mvhdOff + 24, durTicks);
+        for (const off of tkhdOffsets) {
+          view.setUint32(off, durTicks);
+        }
+        for (const m of mdhdEntries) {
+          view.setUint32(m.off, Math.round(durSec * m.timescale));
+        }
+
+        handle.offset = 0;
+        handle.writeBytes(head);
+        return true;
+      }
+      return false;
+    } finally {
+      handle.close();
+    }
+  } catch (e) {
+    console.warn('repairExistingMp4 failed:', e);
+    return false;
+  }
+}
+
+
+/**
  * Télécharge un flux HLS et le transmuxe en un fichier MP4 autonome (`video.mp4`).
  * Supporte la reprise : les segments temporaires déjà téléchargés ne sont pas retéléchargés.
  */
@@ -465,6 +640,7 @@ export async function downloadHlsOffline(
     throw new Error('Playlist vide ou illisible');
   }
 
+  const totalDurationSec = segments.reduce((sum, s) => sum + (s.duration || 0), 0);
   const qualityLabel = pickedVariant ? variantLabel(pickedVariant) : OFFLINE_QUALITY_LABEL[quality];
 
   // 2. Pré-scan des segments temporaires existants pour reprise exacte
@@ -575,7 +751,7 @@ export async function downloadHlsOffline(
 
   transmuxer.on('data', segment => {
     if (!initWritten && segment.initSegment) {
-      const patchedInit = patchFtypHeader(segment.initSegment);
+      const patchedInit = patchInitSegment(segment.initSegment, totalDurationSec);
       handle.writeBytes(patchedInit);
       initWritten = true;
     }
@@ -629,6 +805,7 @@ export async function downloadHlsOffline(
     bytesTotal: finalMp4File.size,
     segments: segments.length,
     qualityLabel,
+    duration: totalDurationSec,
   };
 }
 
