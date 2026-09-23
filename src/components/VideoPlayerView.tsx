@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
   Animated,
 } from 'react-native';
-import { useVideoPlayer, VideoView, VideoContentFit, AudioTrack, SubtitleTrack } from 'expo-video';
+import { useVideoPlayer, VideoView, VideoContentFit, AudioTrack, SubtitleTrack, ContentType } from 'expo-video';
 import { useEvent } from 'expo';
 import { Ionicons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
@@ -165,7 +165,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   // Fichier hors-ligne local : pas de repli réseau, messages dédiés.
   // (fichier direct ou servi via le serveur HTTP local 127.0.0.1)
   const isLocalFile =
-    isLocalFileProp ?? (streamUrl.startsWith('file:') || streamUrl.includes('127.0.0.1'));
+    isLocalFileProp ?? (streamUrl.startsWith('file:') || streamUrl.includes('127.0.0.1') || streamUrl.endsWith('.mp4'));
   const [activeUri, setActiveUri] = useState(streamUrl);
   const [fallbackTried, setFallbackTried] = useState(false);
   const [usingFallback, setUsingFallback] = useState(false);
@@ -181,8 +181,11 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   }, [streamUrl]);
 
   const videoSource = useMemo(
-    () => ({ uri: activeUri, contentType: 'hls' as const }),
-    [activeUri]
+    () => ({
+      uri: activeUri,
+      contentType: (isLocalFile || activeUri.endsWith('.mp4') ? 'progressive' : 'hls') as ContentType,
+    }),
+    [activeUri, isLocalFile]
   );
 
   const player = useVideoPlayer(videoSource, p => {
@@ -261,7 +264,10 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
     try {
       if (isLocalFile) {
         // Fichier local : simple re-tentative, aucune résolution réseau.
-        await player.replaceAsync({ uri: activeUri, contentType: 'hls' as const });
+        await player.replaceAsync({
+          uri: activeUri,
+          contentType: (isLocalFile || activeUri.endsWith('.mp4') ? 'progressive' : 'hls') as ContentType,
+        });
         player.play();
       } else {
         const playable = await resolvePlayableStreamUrl(streamUrl);

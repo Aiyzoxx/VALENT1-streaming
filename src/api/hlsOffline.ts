@@ -1,15 +1,18 @@
 /**
- * hlsOffline — Fige un flux HLS en fichiers locaux lisibles hors-ligne.
+ * hlsOffline — Téléchargement et transmuxage HLS vers MP4 autonome.
  *
- * Principe : télécharge la variante choisie (segments .ts + clés AES-128 +
- * init-map éventuel) puis réécrit une playlist locale `index.m3u8` avec des
- * chemins relatifs. Le player lit ensuite ce fichier local (contentType hls).
+ * Résout le problème du mode avion sur iOS/Android :
+ * Au lieu de stocker des centaines de fragments .ts et une playlist .m3u8
+ * (incompatible avec AVPlayer sous file:// et bloqué sans serveur local),
+ * ce module transmuxe les segments HLS à la volée vers un unique fichier
+ * `video.mp4` (ISO-BMFF fragmented MP4) via mux.js.
  *
- * Limites V1 : pas de DRM (Widevine/FairPlay/SAMPLE-AES refusés), pas de
- * live (pas de EXT-X-ENDLIST), téléchargement au premier plan uniquement.
+ * Le fichier `video.mp4` est ensuite lu nativement par AVPlayer (iOS)
+ * et ExoPlayer (Android) en file:// sans aucune connexion réseau ni serveur.
  */
 
-import { Directory, File } from 'expo-file-system';
+import { Directory, File, FileMode } from 'expo-file-system';
+import muxjs from 'mux.js';
 
 export type OfflineQuality = 'eco' | 'hd' | 'source';
 
@@ -32,27 +35,12 @@ interface Variant {
   width: number;
   height: number;
   codecs: string;
-  audioGroup: string | null;
-  subtitleGroup: string | null;
   uri: string;
-}
-
-interface MediaGroup {
-  type: string;
-  groupId: string;
-  language: string;
-  name: string;
-  isDefault: boolean;
-  uri: string;
-  rawLine: string;
 }
 
 interface Segment {
   uri: string;
   duration: number;
-  keyUri: string | null;
-  keyIv: string | null;
-  mapUri: string | null;
 }
 
 export interface OfflineProgress {
@@ -62,7 +50,7 @@ export interface OfflineProgress {
 }
 
 export interface OfflineResult {
-  /** file:// URI de la playlist locale à donner au player */
+  /** file:// URI du fichier MP4 local autonome à donner au player */
   localUri: string;
   bytesTotal: number;
   segments: number;
@@ -93,7 +81,7 @@ function parseAttributes(line: string): Record<string, string> {
   return attrs;
 }
 
-/** Parse une master playlist. Retourne [] si c'est déjà une media playlist. */
+/** Parse une master playlist HLS et retourne les variantes disponibles. */
 export function parseMaster(text: string, baseUrl: string): Variant[] {
   const lines = text.split(/\r?\n/);
   const variants: Variant[] = [];
@@ -109,33 +97,10 @@ export function parseMaster(text: string, baseUrl: string): Variant[] {
       width: res[0] || 0,
       height: res[1] || 0,
       codecs: attrs.CODECS || '',
-      audioGroup: attrs.AUDIO || null,
-      subtitleGroup: attrs.SUBTITLES || null,
       uri: resolveUrl(uriLine, baseUrl),
     });
   }
   return variants;
-}
-
-/** Parse les lignes EXT-X-MEDIA (audio / sous-titres externes). */
-export function parseMediaGroups(text: string, baseUrl: string): MediaGroup[] {
-  const groups: MediaGroup[] = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line.startsWith('#EXT-X-MEDIA')) continue;
-    const attrs = parseAttributes(line);
-    if (!attrs.URI) continue;
-    groups.push({
-      type: (attrs.TYPE || '').toUpperCase(),
-      groupId: attrs['GROUP-ID'] || '',
-      language: attrs.LANGUAGE || '',
-      name: attrs.NAME || '',
-      isDefault: (attrs.DEFAULT || 'NO').toUpperCase() === 'YES',
-      uri: resolveUrl(attrs.URI, baseUrl),
-      rawLine: line,
-    });
-  }
-  return groups;
 }
 
 export function selectVariant(variants: Variant[], quality: OfflineQuality): Variant {
@@ -145,7 +110,6 @@ export function selectVariant(variants: Variant[], quality: OfflineQuality): Var
     const hb = b.height || Number.MAX_SAFE_INTEGER;
     return ha - hb || a.bandwidth - b.bandwidth;
   });
-  // Plus haute variante qui respecte le plafond, sinon la plus basse dispo.
   let picked = sorted[0];
   for (const v of sorted) {
     const h = v.height || 0;
@@ -164,53 +128,28 @@ export function variantLabel(v: Variant): string {
   return 'Source';
 }
 
-/** Parse une media playlist (segments + clés + init-map). */
-export function parseMedia(text: string, baseUrl: string): { segments: Segment[]; targetDuration: number; version: number } {
+/** Parse une media playlist HLS pour extraire les segments vidéo. */
+export function parseMedia(text: string, baseUrl: string): { segments: Segment[]; targetDuration: number } {
   const lines = text.split(/\r?\n/);
   const segments: Segment[] = [];
   let targetDuration = 6;
-  let version = 3;
-  let curKey: string | null = null;
-  let curIv: string | null = null;
-  let curMap: string | null = null;
   let pendingDuration = 0;
 
   for (const raw of lines) {
     const line = raw.trim();
-    if (line.startsWith('#EXT-X-VERSION')) {
-      version = Number(line.split(':')[1]) || 3;
-    } else if (line.startsWith('#EXT-X-TARGETDURATION')) {
+    if (line.startsWith('#EXT-X-TARGETDURATION')) {
       targetDuration = Number(line.split(':')[1]) || 6;
-    } else if (line.startsWith('#EXT-X-KEY')) {
-      const attrs = parseAttributes(line);
-      const method = (attrs.METHOD || 'NONE').toUpperCase();
-      if (method !== 'NONE' && method !== 'AES-128') {
-        throw new Error(`Chiffrement non supporté hors-ligne (${method})`);
-      }
-      curKey = method === 'AES-128' && attrs.URI ? resolveUrl(attrs.URI, baseUrl) : null;
-      curIv = attrs.IV ?? null;
-    } else if (line.startsWith('#EXT-X-MAP')) {
-      const attrs = parseAttributes(line);
-      curMap = attrs.URI ? resolveUrl(attrs.URI, baseUrl) : null;
     } else if (line.startsWith('#EXTINF')) {
       pendingDuration = Number(line.split(':')[1]?.split(',')[0]) || 0;
     } else if (line && !line.startsWith('#')) {
       segments.push({
         uri: resolveUrl(line, baseUrl),
         duration: pendingDuration,
-        keyUri: curKey,
-        keyIv: curIv,
-        mapUri: curMap,
       });
       pendingDuration = 0;
     }
   }
-  return { segments, targetDuration, version };
-}
-
-async function downloadBytes(url: string, signal?: AbortSignal): Promise<Uint8Array> {
-  const res = await fetchWithRetry(url, { signal, timeoutMs: 30000, retries: 4 });
-  return new Uint8Array(await res.arrayBuffer());
+  return { segments, targetDuration };
 }
 
 function abortError(): DOMException {
@@ -233,10 +172,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/**
- * fetch avec timeout par tentative + réessais espacés.
- * Une pause utilisateur (signal aborté) interrompt immédiatement en AbortError.
- */
 async function fetchWithRetry(
   url: string,
   opts: { signal?: AbortSignal; timeoutMs: number; retries: number }
@@ -254,7 +189,6 @@ async function fetchWithRetry(
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res;
     } catch (e) {
-      // Pause/annulation utilisateur : on ne réessaie pas.
       if (signal?.aborted) throw abortError();
       lastErr = e;
       if (attempt < retries) {
@@ -270,17 +204,20 @@ async function fetchWithRetry(
     }
   }
   if (signal?.aborted) throw abortError();
-  // Échec persistant (dont timeouts répétés) : erreur typée, jamais confondue
-  // avec une pause utilisateur — sinon la fiche resterait en "downloading".
   if ((lastErr as DOMException)?.name === 'AbortError') {
     throw Object.assign(new Error('Connexion trop lente ou instable'), { name: 'TimeoutError' });
   }
   throw lastErr;
 }
 
+async function downloadBytes(url: string, signal?: AbortSignal): Promise<Uint8Array> {
+  const res = await fetchWithRetry(url, { signal, timeoutMs: 30000, retries: 4 });
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 /**
- * Télécharge un flux HLS complet dans `dir` et écrit un master local `index.m3u8`
- * qui référence les renditions locales (vidéo + audio + sous-titres).
+ * Télécharge un flux HLS et le transmuxe en un fichier MP4 autonome (`video.mp4`).
+ * Supporte la reprise : les segments temporaires déjà téléchargés ne sont pas retéléchargés.
  */
 export async function downloadHlsOffline(
   masterUrl: string,
@@ -295,245 +232,144 @@ export async function downloadHlsOffline(
   dir.create({ intermediates: true, idempotent: true });
 
   const throwIfAborted = () => {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (signal?.aborted) throw abortError();
   };
 
-  // Progression agrégée sur toutes les renditions.
-  let totalSeg = 0;
-  let doneSeg = 0;
-  let bytes = 0;
-  const totals = new Map<string, number>();
-  const report = () => onProgress?.({ segmentsDone: doneSeg, segmentsTotal: totalSeg, bytesDownloaded: bytes });
+  throwIfAborted();
 
-  // 1. Master -> variante + groupes media
-  const masterText = await fetchText(masterUrl, signal);
-  const variants = parseMaster(masterText, masterUrl);
-  const picked = variants.length > 0 ? selectVariant(variants, quality) : null;
-  const videoUrl = picked ? picked.uri : masterUrl;
-  const groups = parseMediaGroups(masterText, masterUrl);
+  // 1. Analyse master playlist ou media playlist
+  const rootText = await fetchText(masterUrl, signal);
+  let mediaUrl = masterUrl;
+  let pickedVariant: Variant | null = null;
 
-  const audios = groups.filter(g => g.type === 'AUDIO' && (!picked?.audioGroup || g.groupId === picked.audioGroup));
-  const subs = groups.filter(g => g.type === 'SUBTITLES' && (!picked?.subtitleGroup || g.groupId === picked.subtitleGroup));
-  // Audio : la piste par défaut (souvent VF), sinon la première — 1 seule pour limiter le poids.
-  const audioPick = audios.find(g => g.isDefault) ?? audios[0] ?? null;
-
-  // 2. Télécharge vidéo (+ audio + sous-titres), compte les segments pour la progression.
-  const jobs: { url: string; prefix: string }[] = [{ url: videoUrl, prefix: 'v' }];
-  if (audioPick) jobs.push({ url: audioPick.uri, prefix: 'a' });
-  subs.forEach((s, i) => jobs.push({ url: s.uri, prefix: `s${i}` }));
-
-  // Pré-compte les segments de chaque rendition (1 fetch léger par playlist).
-  const renditions: { job: { url: string; prefix: string }; mediaText: string }[] = [];
-  for (const job of jobs) {
-    throwIfAborted();
-    const mediaText = await fetchText(job.url, signal);
-    const { segments } = parseMedia(mediaText, job.url);
-    if (segments.length === 0) {
-      if (job.prefix === 'v') throw new Error('Playlist vide ou illisible');
-      continue; // rendition secondaire illisible : on l'ignore, la vidéo reste jouable.
+  if (rootText.includes('#EXT-X-STREAM-INF')) {
+    const variants = parseMaster(rootText, masterUrl);
+    if (variants.length > 0) {
+      pickedVariant = selectVariant(variants, quality);
+      mediaUrl = pickedVariant.uri;
     }
-    if (!mediaText.includes('#EXT-X-ENDLIST') && segments.length < 3) {
-      if (job.prefix === 'v') throw new Error('Flux live non supporté hors-ligne');
-      continue;
-    }
-    totals.set(job.prefix, segments.length);
-    totalSeg += segments.length;
-    renditions.push({ job, mediaText });
   }
+
+  throwIfAborted();
+  const mediaText = mediaUrl === masterUrl ? rootText : await fetchText(mediaUrl, signal);
+  const { segments } = parseMedia(mediaText, mediaUrl);
+
+  if (segments.length === 0) {
+    throw new Error('Playlist vide ou illisible');
+  }
+
+  const qualityLabel = pickedVariant ? variantLabel(pickedVariant) : OFFLINE_QUALITY_LABEL[quality];
+
+  // 2. Téléchargement concurrent des segments MPEG-TS en cache temporaire
+  let segmentsDone = 0;
+  let bytesDownloaded = 0;
+
+  const report = () => {
+    onProgress?.({
+      segmentsDone,
+      segmentsTotal: segments.length,
+      bytesDownloaded,
+    });
+  };
+
   report();
 
-  const results = new Map<string, string>();
-  for (const { job, mediaText } of renditions) {
-    throwIfAborted();
-    results.set(job.prefix, await downloadRendition(dir, job.url, job.prefix, mediaText, {
-      signal,
-      onSegment: segBytes => {
-        doneSeg += 1;
-        bytes += segBytes;
-        report();
-      },
-      onBytes: b => {
-        bytes += b;
-      },
-    }));
-  }
-
-  // 3. Master local : reprend les lignes EXT-X-MEDIA téléchargées + 1 variante.
-  let master = '#EXTM3U\n#EXT-X-VERSION:6\n';
-  if (audioPick && results.has('a')) {
-    master += rewriteMediaUri(audioPick.rawLine, 'a.m3u8') + '\n';
-  }
-  subs.forEach((s, i) => {
-    if (results.has(`s${i}`)) master += rewriteMediaUri(s.rawLine, `s${i}.m3u8`) + '\n';
-  });
-  const streamAttrs = [
-    `BANDWIDTH=${picked?.bandwidth || 800000}`,
-    ...(picked && picked.width && picked.height ? [`RESOLUTION=${picked.width}x${picked.height}`] : []),
-    ...(picked?.codecs ? [`CODECS="${picked.codecs}"`] : []),
-    ...(audioPick && results.has('a') ? [`AUDIO="${audioPick.groupId}"`] : []),
-    ...(subs.length > 0 && results.has('s0') ? [`SUBTITLES="${subs[0].groupId}"`] : []),
-  ].join(',');
-  master += `#EXT-X-STREAM-INF:${streamAttrs}\nv.m3u8\n`;
-  const playlistFile = new File(dir, 'index.m3u8');
-  playlistFile.write(master);
-
-  const qualityLabel = picked ? variantLabel(picked) : OFFLINE_QUALITY_LABEL[quality];
-  return { localUri: playlistFile.uri, bytesTotal: bytes, segments: totalSeg, qualityLabel };
-}
-
-/** Réécrit l'URI d'une ligne EXT-X-MEDIA vers le fichier local. */
-function rewriteMediaUri(rawLine: string, localName: string): string {
-  return rawLine.replace(/URI="[^"]*"/, `URI="${localName}"`);
-}
-
-/** Extension du fichier distant (.ts, .m4s, .vtt, .mp4...), défaut .ts. */
-function remoteExt(url: string): string {
-  const m = url.split('?')[0].match(/\.([a-z0-9]{2,4})$/i);
-  return m ? m[1].toLowerCase() : 'ts';
-}
-
-/**
- * Valide qu'un payload ressemble bien à son format (détecte les pages
- * d'erreur HTML servies en 200 OK à la place d'un segment).
- */
-function validPayload(ext: string, data: Uint8Array): boolean {
-  if (data.byteLength === 0) return false;
-  switch (ext) {
-    case 'ts':
-      return data[0] === 0x47; // sync byte MPEG-TS
-    case 'm4s':
-    case 'mp4':
-    case 'm4a':
-      // 'ftyp' aux octets 4-7
-      return (
-        data.byteLength > 8 &&
-        data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70
-      );
-    case 'aac':
-      // syncword ADTS 0xFFFx
-      return data.byteLength > 1 && data[0] === 0xff && (data[1] & 0xf0) === 0xf0;
-    case 'vtt':
-    case 'webvtt':
-      return (
-        data.byteLength > 6 &&
-        data[0] === 0x57 && data[1] === 0x45 && data[2] === 0x42 &&
-        data[3] === 0x56 && data[4] === 0x54 && data[5] === 0x54
-      );
-    default:
-      return data.byteLength > 0;
-  }
-}
-
-/**
- * Télécharge une rendition (media playlist) : clés, init-maps, segments,
- * puis écrit `<prefix>.m3u8` local. Les fichiers existants sont sautés (reprise).
- */
-async function downloadRendition(
-  dir: Directory,
-  mediaUrl: string,
-  prefix: string,
-  mediaText: string,
-  opts: {
-    signal?: AbortSignal;
-    onSegment: (segBytes: number) => void;
-    onBytes: (b: number) => void;
-  }
-): Promise<string> {
-  const { signal, onSegment, onBytes } = opts;
-  const throwIfAborted = () => {
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-  };
-  const { segments, targetDuration, version } = parseMedia(mediaText, mediaUrl);
-
-  // Clés AES-128 + init-maps (dédupliqués, préfixés par rendition).
-  const keyUris = [...new Set(segments.map(s => s.keyUri).filter((u): u is string => !!u))];
-  const mapUris = [...new Set(segments.map(s => s.mapUri).filter((u): u is string => !!u))];
-  const keyFiles = new Map<string, string>();
-  const mapFiles = new Map<string, string>();
-  for (let i = 0; i < keyUris.length; i++) {
-    throwIfAborted();
-    const name = `${prefix}_key_${i}.key`;
-    const file = new File(dir, name);
-    if (!file.exists || file.size === 0) {
-      const data = await downloadBytes(keyUris[i], signal);
-      if (data.byteLength === 0) throw new Error('Clé de chiffrement vide — réponse serveur invalide');
-      file.write(data);
-      onBytes(data.byteLength);
-    } else {
-      onBytes(file.size);
-    }
-    keyFiles.set(keyUris[i], name);
-  }
-  for (let i = 0; i < mapUris.length; i++) {
-    throwIfAborted();
-    const ext = remoteExt(mapUris[i]);
-    const name = `${prefix}_init_${i}.${ext}`;
-    const file = new File(dir, name);
-    if (!file.exists || file.size === 0) {
-      const data = await downloadBytes(mapUris[i], signal);
-      if (!validPayload(ext, data)) throw new Error('Segment d\u2019init illisible — réponse serveur invalide');
-      file.write(data);
-      onBytes(data.byteLength);
-    } else {
-      onBytes(file.size);
-    }
-    mapFiles.set(mapUris[i], name);
-  }
-
-  // Segments (pool de workers, reprise : fichiers existants sautés).
-  // Chaque payload est validé (magic bytes) : une page d'erreur HTML servie
-  // en 200 OK est rejetée au lieu de corrompre silencieusement le bundle.
   let cursor = 0;
   const worker = async () => {
     while (true) {
-      const i = cursor++;
-      if (i >= segments.length) return;
+      const idx = cursor++;
+      if (idx >= segments.length) return;
       throwIfAborted();
-      const ext = remoteExt(segments[i].uri);
-      const name = `${prefix}_seg_${String(i).padStart(5, '0')}.${ext}`;
-      const file = new File(dir, name);
-      if (file.exists && file.size > 0) {
-        onSegment(file.size);
+
+      const segName = `tmp_seg_${String(idx).padStart(5, '0')}.ts`;
+      const segFile = new File(dir, segName);
+
+      if (segFile.exists && segFile.size > 0) {
+        segmentsDone++;
+        bytesDownloaded += segFile.size;
+        report();
       } else {
-        const data = await downloadBytes(segments[i].uri, signal);
-        if (!validPayload(ext, data)) {
-          throw new Error(`Segment ${i + 1}/${segments.length} illisible — réponse serveur invalide`);
+        const segData = await downloadBytes(segments[idx].uri, signal);
+        if (segData.byteLength === 0 || segData[0] !== 0x47) {
+          throw new Error(`Segment ${idx + 1}/${segments.length} invalide`);
         }
-        file.write(data);
-        onSegment(data.byteLength);
+        segFile.write(segData);
+        segmentsDone++;
+        bytesDownloaded += segData.byteLength;
+        report();
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(SEGMENT_CONCURRENCY, segments.length) }, worker));
 
-  // Playlist locale réécrite (chemins relatifs).
-  let out = `#EXTM3U\n#EXT-X-VERSION:${Math.max(version, 4)}\n`;
-  out += `#EXT-X-TARGETDURATION:${targetDuration}\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n`;
-  let lastKey = '';
-  let lastMap = '';
-  segments.forEach((s, i) => {
-    const keyName = s.keyUri ? keyFiles.get(s.keyUri) ?? '' : '';
-    const mapName = s.mapUri ? mapFiles.get(s.mapUri) ?? '' : '';
-    if (mapName && mapName !== lastMap) {
-      out += `#EXT-X-MAP:URI="${mapName}"\n`;
-      lastMap = mapName;
+  await Promise.all(
+    Array.from({ length: Math.min(SEGMENT_CONCURRENCY, segments.length) }, worker)
+  );
+
+  throwIfAborted();
+
+  // 3. Transmuxage séquentiel MPEG-TS -> MP4 (fMP4) via mux.js
+  const finalMp4File = new File(dir, 'video.mp4');
+  if (finalMp4File.exists) {
+    try {
+      finalMp4File.delete();
+    } catch {
+      /* ignore */
     }
-    const keyDecl = keyName ? `#EXT-X-KEY:METHOD=AES-128,URI="${keyName}"${s.keyIv ? `,IV=${s.keyIv}` : ''}\n` : '';
-    if (keyDecl !== lastKey) {
-      out += keyDecl;
-      lastKey = keyDecl;
+  }
+
+  finalMp4File.create({ intermediates: true, overwrite: true });
+  const handle = finalMp4File.open(FileMode.Append);
+
+  const transmuxer = new muxjs.mp4.Transmuxer({ keepOriginalTimestamps: true });
+  let initWritten = false;
+
+  transmuxer.on('data', segment => {
+    if (!initWritten && segment.initSegment) {
+      handle.writeBytes(segment.initSegment);
+      initWritten = true;
     }
-    out += `#EXTINF:${s.duration || targetDuration},\n${prefix}_seg_${String(i).padStart(5, '0')}.${remoteExt(s.uri)}\n`;
+    if (segment.data) {
+      handle.writeBytes(segment.data);
+    }
   });
-  out += '#EXT-X-ENDLIST\n';
-  const playlistName = `${prefix}.m3u8`;
-  const playlistFile = new File(dir, playlistName);
-  playlistFile.write(out);
-  onBytes(playlistFile.size);
-  return playlistName;
+
+  try {
+    for (let i = 0; i < segments.length; i++) {
+      throwIfAborted();
+      const segName = `tmp_seg_${String(i).padStart(5, '0')}.ts`;
+      const segFile = new File(dir, segName);
+
+      if (segFile.exists) {
+        const data = segFile.bytesSync();
+        transmuxer.push(data);
+        transmuxer.flush();
+        // Suppression immédiate du segment source pour libérer le stockage
+        try {
+          segFile.delete();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  } finally {
+    handle.close();
+    transmuxer.dispose();
+  }
+
+  // Vérification de sécurité du fichier final généré
+  if (!finalMp4File.exists || finalMp4File.size < 1024) {
+    throw new Error('Échec de la génération du fichier vidéo MP4');
+  }
+
+  return {
+    localUri: finalMp4File.uri,
+    bytesTotal: finalMp4File.size,
+    segments: segments.length,
+    qualityLabel,
+  };
 }
 
-/** Taille totale d'un dossier (récursif, ignore les absents). */
+/** Taille totale d'un dossier en octets (récursif). */
 export function directoryBytes(dir: Directory): number {
   try {
     if (!dir.exists) return 0;
@@ -549,27 +385,20 @@ export function directoryBytes(dir: Directory): number {
 }
 
 /**
- * Sonde un bundle local : master + rendition vidéo référençant des segments,
- * et premier segment valide (magic bytes). Détecte les bundles corrompus
- * (ex. pages d'erreur HTML enregistrées comme segments).
+ * Sonde un bundle hors-ligne : vérifie que le fichier `video.mp4` existe,
+ * fait au moins 1 Ko et commence bien par le header MP4 `ftyp`.
  */
 export function probeLocalBundle(localUri: string | null): boolean {
   if (!localUri) return false;
   try {
-    const index = new File(localUri);
-    if (!index.exists || index.size === 0) return false;
-    const videoName = localUri.replace(/index\.m3u8$/, 'v.m3u8');
-    const video = new File(videoName);
-    if (!video.exists || video.size === 0) return false;
-    const text = video.textSync();
-    const m = text.match(/([A-Za-z0-9_-]+\.(ts|m4s|mp4|aac))\s*$/m);
-    if (!m) return false;
-    const segFile = new File(video.parentDirectory, m[1]);
-    if (!segFile.exists || segFile.size === 0) return false;
-    const handle = segFile.open();
+    const file = new File(localUri);
+    if (!file.exists || file.size < 1024) return false;
+    const handle = file.open(FileMode.ReadOnly);
     try {
-      const head = handle.readBytes(8);
-      return validPayload(m[2].toLowerCase(), head);
+      const head = handle.readBytes(12);
+      if (head.byteLength < 8) return false;
+      const boxType = String.fromCharCode(head[4], head[5], head[6], head[7]);
+      return boxType === 'ftyp';
     } finally {
       handle.close();
     }
@@ -577,9 +406,9 @@ export function probeLocalBundle(localUri: string | null): boolean {
     return false;
   }
 }
+
 /**
- * Télécharge une cover (poster / miniature d'épisode) dans le dossier du
- * téléchargement. Best-effort : retourne null en cas d'échec (non bloquant).
+ * Télécharge la jaquette / miniature d'un média dans le dossier hors-ligne.
  */
 export async function downloadCover(imageUrl: string | null, dir: Directory): Promise<string | null> {
   if (!imageUrl) return null;

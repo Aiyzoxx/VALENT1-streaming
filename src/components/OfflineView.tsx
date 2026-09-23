@@ -24,7 +24,7 @@ interface OfflineViewProps {
 export const OfflineView: React.FC<OfflineViewProps> = ({ onPlayDownload }) => {
   const insets = useSafeAreaInsets();
   const topPad = insets.top > 0 ? insets.top + 8 : Platform.OS === 'ios' ? 14 : 8;
-  const { downloads, totalBytes, pauseDownload, resumeDownload, removeDownload, serverReady } = useDownloads();
+  const { downloads, totalBytes, pauseDownload, resumeDownload, removeDownload } = useDownloads();
 
   const ready = downloads.filter(r => r.status === 'done');
   const pending = downloads.filter(r => r.status !== 'done');
@@ -51,15 +51,6 @@ export const OfflineView: React.FC<OfflineViewProps> = ({ onPlayDownload }) => {
             {formatBytes(totalBytes)} / {formatBytes(OFFLINE_QUOTA_BYTES)}
           </Text>
         </View>
-
-        {downloads.length > 0 && !serverReady && (
-          <View style={styles.serverWarn}>
-            <Ionicons name="warning-outline" size={18} color={THEME.colors.goldStar} />
-            <Text style={styles.serverWarnText}>
-              Lecteur hors-ligne indisponible : reconstruisez l’app avec le dernier build de développement, puis relancez.
-            </Text>
-          </View>
-        )}
 
         {ready.length > 0 && (
           <>
@@ -147,25 +138,6 @@ const styles = StyleSheet.create({
     fontSize: THEME.typography.sizes.small,
     fontFamily: THEME.fonts.medium,
     color: THEME.colors.textMuted,
-  },
-  serverWarn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginHorizontal: THEME.spacing.screen,
-    marginBottom: THEME.spacing.md,
-    padding: THEME.spacing.md,
-    borderRadius: THEME.radii.card,
-    backgroundColor: THEME.colors.card,
-    borderWidth: 1,
-    borderColor: THEME.colors.goldStar,
-  },
-  serverWarnText: {
-    flex: 1,
-    fontSize: THEME.typography.sizes.caption,
-    fontFamily: THEME.fonts.semibold,
-    color: THEME.colors.textPrimary,
-    lineHeight: 18,
   },
   sectionTitle: {
     paddingHorizontal: THEME.spacing.screen,

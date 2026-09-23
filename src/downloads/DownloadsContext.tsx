@@ -81,20 +81,11 @@ function offlineDir(key: string): Directory {
   return new Directory(Paths.document, 'offline', safe);
 }
 
-function offlineRoot(): Directory {
-  return new Directory(Paths.document, 'offline');
-}
-
 const DownloadsContext = createContext<DownloadsContextValue | null>(null);
 
 export function DownloadsProvider({ children }: { children: React.ReactNode }) {
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
-  // Origine du serveur HTTP local (ex. http://127.0.0.1:52341) — null si
-  // indisponible (Expo Go) : la lecture retombe sur file://.
-  const [serverOrigin, setServerOrigin] = useState<string | null>(null);
-  const serverOriginRef = useRef<string | null>(null);
-  serverOriginRef.current = serverOrigin;
   const activeRef = useRef<{ key: string; abort: AbortController } | null>(null);
   const downloadsRef = useRef<DownloadRecord[]>([]);
   downloadsRef.current = downloads;
@@ -167,53 +158,8 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     };
   }, [persist]);
 
-  // ── Serveur HTTP local : AVPlayer/ExoPlayer ne lisent pas le HLS en file://,
-  // on sert le dossier offline sur http://127.0.0.1 (exempté ATS/cleartext).
-  // Absent en Expo Go (module natif manquant) : repli file:// silencieux.
-  const startingRef = useRef(false);
-  const ensureServer = useCallback(async () => {
-    if (serverOriginRef.current || startingRef.current) return;
-    startingRef.current = true;
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { NativeModules } = require('react-native');
-      if (!NativeModules?.FPStaticServer) return;
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = require('react-native-static-server');
-      const StaticServer = mod.default ?? mod;
-      // Le dossier racine doit exister AVANT le démarrage (sinon échec natif).
-      const root = offlineRoot();
-      try {
-        root.create({ intermediates: true, idempotent: true });
-      } catch {
-        /* ignore */
-      }
-      const rootPath = root.uri.replace(/^file:\/\//, '');
-      const server = new StaticServer(0, rootPath, { localOnly: true, keepAlive: true });
-      const origin = (await server.start()) as string;
-      if (origin) {
-        console.info('Offline server at', origin);
-        setServerOrigin(origin.replace(/\/$/, ''));
-      }
-    } catch (e) {
-      console.warn('Local static server unavailable:', e);
-    } finally {
-      startingRef.current = false;
-    }
-  }, []);
-
-  useEffect(() => {
-    ensureServer();
-  }, [ensureServer]);
-
-  const toServeUrl = useCallback((fileUri: string): string => {
-    const origin = serverOriginRef.current;
-    if (!origin) return fileUri;
-    const marker = '/offline/';
-    const idx = fileUri.indexOf(marker);
-    if (idx === -1) return fileUri;
-    return `${origin}/${fileUri.slice(idx + marker.length)}`;
-  }, []);
+  // Retourne l'URI directe du fichier fMP4 local (lecture native sans serveur HTTP)
+  const toServeUrl = useCallback((fileUri: string): string => fileUri, []);
 
   const usedBytes = useMemo(
     () => downloads.reduce((t, r) => t + (r.status === 'done' ? r.bytesTotal ?? r.bytesDownloaded : r.bytesDownloaded), 0),
@@ -363,8 +309,6 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
   const startDownload = useCallback(
     async (media: MediaItem, episode: Episode | null, quality: OfflineQuality) => {
       const key = downloadKeyFor(media.id, episode?.id ?? null);
-      // Le serveur local doit tourner pour la lecture : (re)tente ici aussi.
-      ensureServer().catch(() => {});
       const existing = downloadsRef.current.find(r => r.key === key);
       if (existing && (existing.status === 'downloading' || existing.status === 'queued')) return;
       if (existing && existing.status === 'done') return;
@@ -474,10 +418,10 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       resumeDownload,
       removeDownload,
       verifyLocal,
-      serverReady: serverOrigin !== null,
+      serverReady: true,
       totalBytes: usedBytes,
     }),
-    [downloads, getLocalUri, toServeUrl, getRecord, startDownload, pauseDownload, resumeDownload, removeDownload, verifyLocal, serverOrigin, usedBytes]
+    [downloads, getLocalUri, toServeUrl, getRecord, startDownload, pauseDownload, resumeDownload, removeDownload, verifyLocal, usedBytes]
   );
 
   return <DownloadsContext.Provider value={value}>{children}</DownloadsContext.Provider>;
