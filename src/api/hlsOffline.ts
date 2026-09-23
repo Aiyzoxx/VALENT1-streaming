@@ -216,12 +216,147 @@ async function downloadBytes(url: string, signal?: AbortSignal): Promise<Uint8Ar
 }
 
 /**
- * Active le flag default-base-is-moof (0x020000) dans chaque boîte tfhd.
- * Obligatoire pour Apple AVPlayer sous iOS pour Fragmented MP4 (fMP4) :
- * sans ce flag, AVPlayer calcule l'offset des échantillons vidéo par rapport
- * au fragment précédent au lieu du moof, ce qui déphase les NAL units et
- * provoque un écran noir avec le son seul.
+ * Réorganise et unifie les boîtes moof et mdat pour chaque segment fMP4.
+ *
+ * Contexte technique critique (Apple AVPlayer sous iOS) :
+ * mux.js émet par défaut deux paires moof+mdat distinctes pour chaque segment
+ * (une pour l'audio en premier, puis une pour la vidéo en second).
+ * Sous iOS, AVPlayer lit le premier moof (audio seul), initialise la piste audio,
+ * et ne trouvant pas de données vidéo dans ce premier fragment de temps, refuse
+ * d'activer la surface de rendu vidéo (isReadyForDisplay = false). Résultat : écran noir avec son seul.
+ *
+ * Cette fonction fusionne les fragments d'un même segment en :
+ * 1. UN SEUL moof unifié contenant traf(vidéo) en premier et traf(audio) en second.
+ * 2. Active default-base-is-moof (0x020000) dans les deux tfhd.
+ * 3. Recalcule précisément data_offset dans trun pour chaque piste.
+ * 4. UN SEUL mdat unifié contenant les données vidéo suivies des données audio.
+ *
+ * Ce format est 100% conforme à la norme ISO-BMFF et lu nativement par AVPlayer (iOS) et ExoPlayer (Android).
  */
+function recombineSegmentData(buf: Uint8Array): Uint8Array {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  const boxes: Array<{ type: string; off: number; len: number }> = [];
+  let off = 0;
+  while (off < buf.byteLength - 8) {
+    if (buf.byteLength - off < 8) break;
+    const len = view.getUint32(off);
+    if (len === 0 || len === 1 || len > buf.byteLength - off) break;
+    const type = String.fromCharCode(buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]);
+    boxes.push({ type, off, len });
+    off += len;
+  }
+
+  const moofs = boxes.filter(b => b.type === 'moof');
+  const mdats = boxes.filter(b => b.type === 'mdat');
+
+  if (moofs.length !== 2 || mdats.length !== 2) {
+    return patchDefaultBaseIsMoof(buf);
+  }
+
+  let videoMoof: { off: number; len: number } | null = null;
+  let videoMdat: { off: number; len: number } | null = null;
+  let audioMoof: { off: number; len: number } | null = null;
+  let audioMdat: { off: number; len: number } | null = null;
+
+  for (let i = 0; i < 2; i++) {
+    const m = moofs[i];
+    let trafOff = m.off + 8;
+    const moofEnd = m.off + m.len;
+    let isVideo = false;
+    while (trafOff < moofEnd - 8) {
+      const bLen = view.getUint32(trafOff);
+      if (bLen === 0 || bLen > moofEnd - trafOff) break;
+      const bType = String.fromCharCode(buf[trafOff + 4], buf[trafOff + 5], buf[trafOff + 6], buf[trafOff + 7]);
+      if (bType === 'traf') {
+        let boxOff = trafOff + 8;
+        const trafEnd = trafOff + bLen;
+        while (boxOff < trafEnd - 8) {
+          const sLen = view.getUint32(boxOff);
+          if (sLen === 0 || sLen > trafEnd - boxOff) break;
+          const sType = String.fromCharCode(buf[boxOff + 4], buf[boxOff + 5], buf[boxOff + 6], buf[boxOff + 7]);
+          if (sType === 'sdtp' || sType === 'vmhd') {
+            isVideo = true;
+          } else if (sType === 'tfhd') {
+            const trackId = view.getUint32(boxOff + 12);
+            if (trackId === 256 || trackId === 1) isVideo = true;
+          }
+          boxOff += sLen;
+        }
+      }
+      trafOff += bLen;
+    }
+
+    if (isVideo) {
+      videoMoof = m;
+      videoMdat = mdats[i];
+    } else {
+      audioMoof = m;
+      audioMdat = mdats[i];
+    }
+  }
+
+  if (!videoMoof || !audioMoof || !videoMdat || !audioMdat) {
+    return patchDefaultBaseIsMoof(buf);
+  }
+
+  const mfhdLen = view.getUint32(videoMoof.off + 8);
+  const mfhd = buf.subarray(videoMoof.off + 8, videoMoof.off + 8 + mfhdLen);
+
+  const videoTraf = buf.subarray(videoMoof.off + 8 + mfhdLen, videoMoof.off + videoMoof.len);
+  const audioMfhdLen = view.getUint32(audioMoof.off + 8);
+  const audioTraf = buf.subarray(audioMoof.off + 8 + audioMfhdLen, audioMoof.off + audioMoof.len);
+
+  const videoPayload = buf.subarray(videoMdat.off + 8, videoMdat.off + videoMdat.len);
+  const audioPayload = buf.subarray(audioMdat.off + 8, audioMdat.off + audioMdat.len);
+
+  const combinedMoofLen = 8 + mfhd.byteLength + videoTraf.byteLength + audioTraf.byteLength;
+  const combinedMdatLen = 8 + videoPayload.byteLength + audioPayload.byteLength;
+  const out = new Uint8Array(combinedMoofLen + combinedMdatLen);
+  const outView = new DataView(out.buffer, out.byteOffset, out.byteLength);
+
+  outView.setUint32(0, combinedMoofLen);
+  out[4] = 0x6d; out[5] = 0x6f; out[6] = 0x6f; out[7] = 0x66; // 'moof'
+  out.set(mfhd, 8);
+
+  const videoTrafOff = 8 + mfhd.byteLength;
+  out.set(videoTraf, videoTrafOff);
+
+  const audioTrafOff = videoTrafOff + videoTraf.byteLength;
+  out.set(audioTraf, audioTrafOff);
+
+  const trafs = [
+    { off: videoTrafOff, isVideo: true },
+    { off: audioTrafOff, isVideo: false },
+  ];
+
+  for (const t of trafs) {
+    const trafLen = outView.getUint32(t.off);
+    let boxOff = t.off + 8;
+    const trafEnd = t.off + trafLen;
+    while (boxOff < trafEnd - 8) {
+      const bLen = outView.getUint32(boxOff);
+      if (bLen === 0 || bLen > trafEnd - boxOff) break;
+      const bType = String.fromCharCode(out[boxOff + 4], out[boxOff + 5], out[boxOff + 6], out[boxOff + 7]);
+      if (bType === 'tfhd') {
+        out[boxOff + 9] |= 0x02; // default-base-is-moof
+      } else if (bType === 'trun') {
+        out[boxOff + 11] |= 0x01; // active le flag data-offset-present (bit 0)
+        const targetOffset = t.isVideo ? (combinedMoofLen + 8) : (combinedMoofLen + 8 + videoPayload.byteLength);
+        outView.setInt32(boxOff + 16, targetOffset);
+      }
+      boxOff += bLen;
+    }
+  }
+
+  const mdatOff = combinedMoofLen;
+  outView.setUint32(mdatOff, combinedMdatLen);
+  out[mdatOff + 4] = 0x6d; out[mdatOff + 5] = 0x64; out[mdatOff + 6] = 0x61; out[mdatOff + 7] = 0x74; // 'mdat'
+  out.set(videoPayload, mdatOff + 8);
+  out.set(audioPayload, mdatOff + 8 + videoPayload.byteLength);
+
+  return out;
+}
+
 function patchDefaultBaseIsMoof(buf: Uint8Array): Uint8Array {
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   let off = 0;
@@ -245,8 +380,6 @@ function patchDefaultBaseIsMoof(buf: Uint8Array): Uint8Array {
             if (bLen === 0 || bLen > trafEnd - boxOff) break;
             const bType = String.fromCharCode(buf[boxOff + 4], buf[boxOff + 5], buf[boxOff + 6], buf[boxOff + 7]);
             if (bType === 'tfhd') {
-              // tfhd: [4b size][4b 'tfhd'][1b version][3b flags]...
-              // default-base-is-moof est 0x020000 (bit 1 du 1er octet de flags)
               buf[boxOff + 9] |= 0x02;
             }
             boxOff += bLen;
@@ -447,7 +580,7 @@ export async function downloadHlsOffline(
       initWritten = true;
     }
     if (segment.data) {
-      const patchedData = patchDefaultBaseIsMoof(segment.data);
+      const patchedData = recombineSegmentData(segment.data);
       handle.writeBytes(patchedData);
     }
   });

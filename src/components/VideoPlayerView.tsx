@@ -160,9 +160,9 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
   const videoSource = useMemo(
     () => ({
       uri: activeUri,
-      contentType: (isLocalFile || activeUri.endsWith('.mp4') ? 'progressive' : 'hls') as ContentType,
+      contentType: (activeUri.includes('.m3u8') ? 'hls' : 'auto') as ContentType,
     }),
-    [activeUri, isLocalFile]
+    [activeUri]
   );
 
   const player = useVideoPlayer(videoSource, p => {
@@ -243,7 +243,7 @@ export const VideoPlayerView: React.FC<VideoPlayerViewProps> = ({
         // Fichier local : simple re-tentative, aucune résolution réseau.
         await player.replaceAsync({
           uri: activeUri,
-          contentType: (isLocalFile || activeUri.endsWith('.mp4') ? 'progressive' : 'hls') as ContentType,
+          contentType: (activeUri.includes('.m3u8') ? 'hls' : 'auto') as ContentType,
         });
         player.play();
       } else {
