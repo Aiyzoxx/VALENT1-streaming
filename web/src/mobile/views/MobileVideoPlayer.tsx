@@ -161,7 +161,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native Safari support
       video.src = resolvedUrl;
-      video.addEventListener('loadedmetadata', () => {
+      const onLoaded = () => {
         setIsBuffering(false);
         setStreamError(null);
         if (initialTime > 0) video.currentTime = initialTime;
@@ -171,12 +171,20 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
             setIsPlaying(false);
             setControlsVisible(true);
           });
-      });
-      video.addEventListener('error', () => {
+      };
+      const onErr = () => {
         setStreamError('Erreur de lecture sur le lecteur vidéo.');
         setIsBuffering(false);
         setControlsVisible(true);
-      });
+      };
+
+      video.addEventListener('loadedmetadata', onLoaded);
+      video.addEventListener('error', onErr);
+
+      return () => {
+        video.removeEventListener('loadedmetadata', onLoaded);
+        video.removeEventListener('error', onErr);
+      };
     }
   }, [resolvedUrl, initialTime]);
 

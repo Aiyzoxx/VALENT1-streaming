@@ -160,7 +160,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       };
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = resolvedUrl;
-      video.addEventListener('loadedmetadata', () => {
+      const onLoaded = () => {
         setIsBuffering(false);
         setStreamError(null);
         if (initialTime > 0) video.currentTime = initialTime;
@@ -170,12 +170,20 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
             setIsPlaying(false);
             setControlsVisible(true);
           });
-      });
-      video.addEventListener('error', () => {
+      };
+      const onErr = () => {
         setStreamError('Erreur de lecture sur le lecteur vidéo.');
         setIsBuffering(false);
         setControlsVisible(true);
-      });
+      };
+
+      video.addEventListener('loadedmetadata', onLoaded);
+      video.addEventListener('error', onErr);
+
+      return () => {
+        video.removeEventListener('loadedmetadata', onLoaded);
+        video.removeEventListener('error', onErr);
+      };
     }
   }, [resolvedUrl, initialTime]);
 

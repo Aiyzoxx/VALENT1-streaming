@@ -193,7 +193,6 @@ export const CoverflowCarousel: React.FC<CoverflowCarouselProps> = ({
               transformStyle: 'preserve-3d',
               willChange: 'transform, opacity',
               backgroundColor: '#1A1F29',
-              WebkitMaskImage: '-webkit-radial-gradient(white, black)',
             }}
           >
             <img
