@@ -13,7 +13,7 @@ import {
   IoReloadOutline,
 } from 'react-icons/io5';
 import { formatTime } from '../../shared/utils/format';
-import { resolvePlayableStreamUrl } from '../../shared/api/hls';
+import { resolvePlayableStreamUrl, resolveVariantUrl } from '../../shared/api/hls';
 
 interface DesktopVideoPlayerProps {
   streamUrl: string;
@@ -64,6 +64,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
     key: number;
   } | null>(null);
 
+  const fallbackTriedRef = useRef(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resetHideTimer = useCallback(() => {
@@ -76,8 +77,25 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
     }, 3500);
   }, [isPlaying, showSettings]);
 
+  const tryFallbackVariant = useCallback(async () => {
+    if (fallbackTriedRef.current) return false;
+    fallbackTriedRef.current = true;
+    try {
+      const variant = await resolveVariantUrl(streamUrl);
+      if (variant && variant !== resolvedUrl) {
+        console.log('Desktop player falling back to variant URL:', variant);
+        setResolvedUrl(variant);
+        return true;
+      }
+    } catch (e) {
+      console.warn('Desktop fallback variant error:', e);
+    }
+    return false;
+  }, [streamUrl, resolvedUrl]);
+
   useEffect(() => {
     let alive = true;
+    fallbackTriedRef.current = false;
     resolvePlayableStreamUrl(streamUrl).then((url) => {
       if (alive) setResolvedUrl(url);
     });
@@ -135,7 +153,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         setCurrentLevel(hls.autoLevelEnabled ? -1 : data.level);
       });
 
-      hls.on(Hls.Events.ERROR, (_, data) => {
+      hls.on(Hls.Events.ERROR, async (_, data) => {
         console.warn('Desktop HLS Event Error:', data.type, data.details, 'fatal:', data.fatal);
         if (data.fatal) {
           switch (data.type) {
@@ -146,9 +164,12 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
               hls.recoverMediaError();
               break;
             default:
-              setStreamError('Impossible de charger le flux vidéo.');
-              setIsBuffering(false);
-              setControlsVisible(true);
+              const recovered = await tryFallbackVariant();
+              if (!recovered) {
+                setStreamError('Impossible de charger le flux vidéo.');
+                setIsBuffering(false);
+                setControlsVisible(true);
+              }
               break;
           }
         }
@@ -171,10 +192,13 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
             setControlsVisible(true);
           });
       };
-      const onErr = () => {
-        setStreamError('Erreur de lecture sur le lecteur vidéo.');
-        setIsBuffering(false);
-        setControlsVisible(true);
+      const onErr = async () => {
+        const recovered = await tryFallbackVariant();
+        if (!recovered) {
+          setStreamError('Erreur de lecture sur le lecteur vidéo.');
+          setIsBuffering(false);
+          setControlsVisible(true);
+        }
       };
 
       video.addEventListener('loadedmetadata', onLoaded);
@@ -185,7 +209,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         video.removeEventListener('error', onErr);
       };
     }
-  }, [resolvedUrl, initialTime]);
+  }, [resolvedUrl, initialTime, tryFallbackVariant]);
 
   const togglePlay = useCallback(() => {
     if (!videoRef.current) return;
@@ -381,12 +405,19 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
           </p>
           <div style={{ display: 'flex', gap: 14 }}>
             <button
-              onClick={() => {
+              onClick={async () => {
                 setStreamError(null);
                 setIsBuffering(true);
-                if (hlsRef.current && resolvedUrl) {
-                  hlsRef.current.loadSource(resolvedUrl);
+                fallbackTriedRef.current = false;
+                const freshUrl = await resolvePlayableStreamUrl(streamUrl);
+                setResolvedUrl(freshUrl);
+                if (hlsRef.current) {
+                  hlsRef.current.loadSource(freshUrl);
                   if (videoRef.current) hlsRef.current.attachMedia(videoRef.current);
+                } else if (videoRef.current) {
+                  videoRef.current.src = freshUrl;
+                  videoRef.current.load();
+                  videoRef.current.play().catch(() => {});
                 }
               }}
               style={{

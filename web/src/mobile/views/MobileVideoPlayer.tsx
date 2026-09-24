@@ -11,7 +11,7 @@ import {
   IoReloadOutline,
 } from 'react-icons/io5';
 import { formatTime } from '../../shared/utils/format';
-import { resolvePlayableStreamUrl } from '../../shared/api/hls';
+import { resolvePlayableStreamUrl, resolveVariantUrl } from '../../shared/api/hls';
 
 interface MobileVideoPlayerProps {
   streamUrl: string;
@@ -63,6 +63,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
     key: number;
   } | null>(null);
 
+  const fallbackTriedRef = useRef(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resetHideTimer = useCallback(() => {
@@ -75,9 +76,26 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
     }, 3500);
   }, [isPlaying, showSettings]);
 
+  const tryFallbackVariant = useCallback(async () => {
+    if (fallbackTriedRef.current) return false;
+    fallbackTriedRef.current = true;
+    try {
+      const variant = await resolveVariantUrl(streamUrl);
+      if (variant && variant !== resolvedUrl) {
+        console.log('Mobile player falling back to variant URL:', variant);
+        setResolvedUrl(variant);
+        return true;
+      }
+    } catch (e) {
+      console.warn('Mobile fallback variant error:', e);
+    }
+    return false;
+  }, [streamUrl, resolvedUrl]);
+
   // Resolve stream URL for incompatible playlists
   useEffect(() => {
     let alive = true;
+    fallbackTriedRef.current = false;
     resolvePlayableStreamUrl(streamUrl).then((url) => {
       if (alive) setResolvedUrl(url);
     });
@@ -135,7 +153,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         setCurrentLevel(hls.autoLevelEnabled ? -1 : data.level);
       });
 
-      hls.on(Hls.Events.ERROR, (_, data) => {
+      hls.on(Hls.Events.ERROR, async (_, data) => {
         console.warn('Mobile HLS Event Error:', data.type, data.details, 'fatal:', data.fatal);
         if (data.fatal) {
           switch (data.type) {
@@ -146,9 +164,12 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
               hls.recoverMediaError();
               break;
             default:
-              setStreamError('Impossible de charger la vidéo. Vérifiez votre connexion.');
-              setIsBuffering(false);
-              setControlsVisible(true);
+              const recovered = await tryFallbackVariant();
+              if (!recovered) {
+                setStreamError('Impossible de charger la vidéo. Vérifiez votre connexion.');
+                setIsBuffering(false);
+                setControlsVisible(true);
+              }
               break;
           }
         }
@@ -172,10 +193,13 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
             setControlsVisible(true);
           });
       };
-      const onErr = () => {
-        setStreamError('Erreur de lecture sur le lecteur vidéo.');
-        setIsBuffering(false);
-        setControlsVisible(true);
+      const onErr = async () => {
+        const recovered = await tryFallbackVariant();
+        if (!recovered) {
+          setStreamError('Erreur de lecture sur le lecteur vidéo.');
+          setIsBuffering(false);
+          setControlsVisible(true);
+        }
       };
 
       video.addEventListener('loadedmetadata', onLoaded);
@@ -186,7 +210,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         video.removeEventListener('error', onErr);
       };
     }
-  }, [resolvedUrl, initialTime]);
+  }, [resolvedUrl, initialTime, tryFallbackVariant]);
 
   // Video event handlers
   const handleTimeUpdate = () => {
@@ -356,12 +380,19 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
           </p>
           <div style={{ display: 'flex', gap: 12 }}>
             <button
-              onClick={() => {
+              onClick={async () => {
                 setStreamError(null);
                 setIsBuffering(true);
-                if (hlsRef.current && resolvedUrl) {
-                  hlsRef.current.loadSource(resolvedUrl);
+                fallbackTriedRef.current = false;
+                const freshUrl = await resolvePlayableStreamUrl(streamUrl);
+                setResolvedUrl(freshUrl);
+                if (hlsRef.current) {
+                  hlsRef.current.loadSource(freshUrl);
                   if (videoRef.current) hlsRef.current.attachMedia(videoRef.current);
+                } else if (videoRef.current) {
+                  videoRef.current.src = freshUrl;
+                  videoRef.current.load();
+                  videoRef.current.play().catch(() => {});
                 }
               }}
               style={{

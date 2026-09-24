@@ -37,48 +37,36 @@ export function pickVariantUrl(masterText: string, baseUrl: string): string | nu
   return null;
 }
 
-export async function resolveVariantUrl(masterUrl: string, timeoutMs = 10000): Promise<string | null> {
+export function toProxiedStreamUrl(streamUrl: string): string {
+  if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
+  if (streamUrl.startsWith('/api/proxy')) return streamUrl;
+
+  if (streamUrl.includes('finepulfe.xyz')) {
+    return streamUrl.replace(/^https?:\/\/[^\/]+/, '/api/proxy');
+  }
+  return streamUrl;
+}
+
+export async function resolveVariantUrl(masterUrl: string, timeoutMs = 8000): Promise<string | null> {
+  const proxiedMaster = toProxiedStreamUrl(masterUrl);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(masterUrl, {
+    const res = await fetch(proxiedMaster, {
       signal: ctrl.signal,
       headers: { Accept: 'application/vnd.apple.mpegurl, application/x-mpegurl, */*' },
     });
     if (!res.ok) return null;
     const text = await res.text();
     if (!text.includes('#EXT-X-STREAM-INF')) return null;
-    const variant = pickVariantUrl(text, masterUrl);
-    if (!variant || variant === masterUrl) return null;
+    const variant = pickVariantUrl(text, proxiedMaster);
+    if (!variant || variant === proxiedMaster) return null;
     return variant;
   } catch {
     return null;
   } finally {
     clearTimeout(timer);
   }
-}
-
-const streamUrlCache = new Map<string, string>();
-
-export function hasIncompatibleMediaTags(manifestText: string): boolean {
-  const hasVttSubs = /#EXT-X-MEDIA:TYPE=SUBTITLES[^\n]+URI="[^"]+\.vtt"/i.test(manifestText);
-  const hasSeparateAudio = /#EXT-X-MEDIA:TYPE=AUDIO[^\n]+URI="[^"]+\.m3u8"/i.test(manifestText);
-  return hasVttSubs || hasSeparateAudio;
-}
-
-export function toProxiedStreamUrl(streamUrl: string): string {
-  if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
-  let target = streamUrl;
-
-  // Finepulfe series have broken .vtt syntax in master.m3u8; 720p/playlist.m3u8 has full audio+video multiplexed
-  if (target.includes('finepulfe.xyz') && /\/tv\/[^\/]+\/S\d+\/E\d+\/master\.m3u8/i.test(target)) {
-    target = target.replace(/\/master\.m3u8$/i, '/720p/playlist.m3u8');
-  }
-
-  if (target.includes('finepulfe.xyz')) {
-    return target.replace(/^https?:\/\/[^\/]+/, '/api/proxy');
-  }
-  return target;
 }
 
 export async function resolvePlayableStreamUrl(streamUrl: string): Promise<string> {
