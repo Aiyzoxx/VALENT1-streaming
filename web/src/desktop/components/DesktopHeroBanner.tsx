@@ -1,6 +1,7 @@
 import React from 'react';
 import { IoPlay, IoInformationCircleOutline, IoHeart, IoHeartOutline, IoStar } from 'react-icons/io5';
 import { MediaItem } from '../../shared/types/media';
+import { optimizeImageUrl } from '../../shared/utils/image';
 
 interface DesktopHeroBannerProps {
   item: MediaItem;
@@ -23,8 +24,8 @@ export const DesktopHeroBanner: React.FC<DesktopHeroBannerProps> = ({
     item.title?.toLowerCase().includes('casa de papel');
 
   const backdropSrc = isMoneyHeist
-    ? '/assets/figma/hero_money_heist.jpg'
-    : item.backdropUrl || item.posterUrl;
+    ? '/assets/figma/hero_money_heist.webp'
+    : optimizeImageUrl(item.backdropUrl || item.posterUrl, 'backdrop');
 
   return (
     <div

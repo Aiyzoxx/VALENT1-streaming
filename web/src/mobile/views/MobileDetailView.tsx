@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { IoArrowBack, IoHeart, IoHeartOutline, IoPlay, IoStar } from 'react-icons/io5';
 import { MediaItem, Episode } from '../../shared/types/media';
 import { tmdb, tmdbImage } from '../../shared/api/tmdb';
+import { optimizeImageUrl } from '../../shared/utils/image';
 
 interface MobileDetailViewProps {
   item: MediaItem;
@@ -37,7 +38,7 @@ export const MobileDetailView: React.FC<MobileDetailViewProps> = ({
           duration: '50m',
           synopsis: 'The Professor faces Sierra while Tamayo raises the stakes of the negotiation by calling in the army.',
           streamUrl: item.episodeUrls?.[0]?.url || item.episodes?.[0]?.streamUrl || baseStream,
-          thumbnailUrl: '/assets/figma/episode_1.png',
+          thumbnailUrl: '/assets/figma/episode_1.webp',
         },
         {
           id: '3695-s5-e2',
@@ -47,7 +48,7 @@ export const MobileDetailView: React.FC<MobileDetailViewProps> = ({
           duration: '52m',
           synopsis: 'Arturo seizes an opportunity to fight back while escalating a personal vendetta.',
           streamUrl: item.episodeUrls?.[1]?.url || item.episodes?.[1]?.streamUrl || baseStream,
-          thumbnailUrl: '/assets/figma/episode_2.png',
+          thumbnailUrl: '/assets/figma/episode_2.webp',
         },
         {
           id: '3695-s5-e3',
@@ -57,7 +58,7 @@ export const MobileDetailView: React.FC<MobileDetailViewProps> = ({
           duration: '50m',
           synopsis: 'A betrayal and an emergency catch Sierra off guard. Palermo rallies the troops as the army closes in.',
           streamUrl: item.episodeUrls?.[2]?.url || item.episodes?.[2]?.streamUrl || baseStream,
-          thumbnailUrl: '/assets/figma/episode_3.png',
+          thumbnailUrl: '/assets/figma/episode_3.webp',
         },
         {
           id: '3695-s5-e4',
@@ -67,7 +68,7 @@ export const MobileDetailView: React.FC<MobileDetailViewProps> = ({
           duration: '52m',
           synopsis: 'Helsinki’s life hangs in the balance as the team faces intense crossfire from the military unit.',
           streamUrl: item.episodeUrls?.[3]?.url || item.episodes?.[3]?.streamUrl || baseStream,
-          thumbnailUrl: '/assets/figma/episode_1.png',
+          thumbnailUrl: '/assets/figma/episode_1.webp',
         },
       ];
     }
@@ -213,8 +214,8 @@ export const MobileDetailView: React.FC<MobileDetailViewProps> = ({
   }, [item, allEpisodes, isMoneyHeist]);
 
   const heroImageSrc = isMoneyHeist
-    ? '/assets/figma/hero_money_heist.jpg'
-    : item.backdropUrl || item.posterUrl;
+    ? '/assets/figma/hero_money_heist.webp'
+    : optimizeImageUrl(item.backdropUrl || item.posterUrl, 'backdrop');
 
   const handlePlayMain = () => {
     const firstEp = seasonEpisodes[0] ?? allEpisodes[0];
@@ -497,14 +498,15 @@ export const MobileDetailView: React.FC<MobileDetailViewProps> = ({
           {/* Episode List */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {seasonEpisodes.map((ep, idx) => {
-              const epImage = isMoneyHeist
-                ? `/assets/figma/episode_${(idx % 3) + 1}.png`
+              const rawEpImage = isMoneyHeist
+                ? `/assets/figma/episode_${(idx % 3) + 1}.webp`
                 : stills[ep.id] ||
                   (ep.thumbnailUrl &&
                   ep.thumbnailUrl !== item.backdropUrl &&
                   ep.thumbnailUrl !== item.posterUrl
                     ? ep.thumbnailUrl
                     : item.backdropUrl || item.posterUrl);
+              const epImage = optimizeImageUrl(rawEpImage, 'thumb');
 
               const epDisplayTitle = epTitles[ep.id] || ep.title;
               const epDisplaySynopsis = epSynopses[ep.id] || ep.synopsis;

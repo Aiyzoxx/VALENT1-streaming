@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { IoPlay, IoStar, IoHeart, IoHeartOutline, IoFilmOutline } from 'react-icons/io5';
 import { MediaItem } from '../../shared/types/media';
+import { optimizeImageUrl } from '../../shared/utils/image';
 
 interface DesktopPosterCardProps {
   item: MediaItem;
@@ -22,15 +23,15 @@ export const DesktopPosterCard: React.FC<DesktopPosterCardProps> = ({
 
   const getPosterUrl = () => {
     if (item.id === '3695' || item.title?.toLowerCase().includes('money heist') || item.title?.toLowerCase().includes('casa de papel')) {
-      return '/assets/figma/poster_money_heist.png';
+      return '/assets/figma/poster_money_heist.webp';
     }
     if (item.id === 'lucifer-figma' || item.title?.toLowerCase() === 'lucifer') {
-      return '/assets/figma/poster_lucifer.png';
+      return '/assets/figma/poster_lucifer.webp';
     }
     if (item.id === 'sex-ed-figma' || item.title?.toLowerCase().includes('sex education')) {
-      return '/assets/figma/poster_sex_education.png';
+      return '/assets/figma/poster_sex_education.webp';
     }
-    return item.posterUrl || '';
+    return optimizeImageUrl(item.posterUrl, 'poster');
   };
 
   const posterSrc = getPosterUrl();
