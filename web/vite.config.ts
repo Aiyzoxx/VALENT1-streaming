@@ -10,6 +10,9 @@ export default defineConfig({
         target: 'https://free.finepulfe.xyz',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/proxy/, ''),
+        headers: {
+          Referer: 'https://free.finepulfe.xyz/',
+        },
       },
     },
   },

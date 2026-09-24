@@ -55,6 +55,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   const [subtitles, setSubtitles] = useState<{ id: number; name: string }[]>([]);
   const [currentSub, setCurrentSub] = useState(-1);
   const [isBuffering, setIsBuffering] = useState(true);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>(streamUrl);
   const [seekingLeft, setSeekingLeft] = useState(false);
   const [seekingRight, setSeekingRight] = useState(false);
@@ -102,6 +103,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
         setIsBuffering(false);
+        setStreamError(null);
         setLevels(
           data.levels.map((lvl, idx) => ({
             id: idx,
@@ -109,7 +111,12 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
           }))
         );
         if (initialTime > 0) video.currentTime = initialTime;
-        video.play().catch(() => setIsPlaying(false));
+        video.play()
+          .then(() => setIsPlaying(true))
+          .catch(() => {
+            setIsPlaying(false);
+            setControlsVisible(true);
+          });
       });
 
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
@@ -128,6 +135,25 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         setCurrentLevel(hls.autoLevelEnabled ? -1 : data.level);
       });
 
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        console.warn('Desktop HLS Event Error:', data.type, data.details, 'fatal:', data.fatal);
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              setStreamError('Impossible de charger le flux vidéo.');
+              setIsBuffering(false);
+              setControlsVisible(true);
+              break;
+          }
+        }
+      });
+
       return () => {
         hls.destroy();
         hlsRef.current = null;
@@ -136,8 +162,19 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       video.src = resolvedUrl;
       video.addEventListener('loadedmetadata', () => {
         setIsBuffering(false);
+        setStreamError(null);
         if (initialTime > 0) video.currentTime = initialTime;
-        video.play().catch(() => setIsPlaying(false));
+        video.play()
+          .then(() => setIsPlaying(true))
+          .catch(() => {
+            setIsPlaying(false);
+            setControlsVisible(true);
+          });
+      });
+      video.addEventListener('error', () => {
+        setStreamError('Erreur de lecture sur le lecteur vidéo.');
+        setIsBuffering(false);
+        setControlsVisible(true);
       });
     }
   }, [resolvedUrl, initialTime]);
@@ -297,7 +334,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       />
 
       {/* Buffering spinner */}
-      {isBuffering && (
+      {isBuffering && !streamError && (
         <div
           style={{
             position: 'absolute',
@@ -309,6 +346,71 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
             animation: 'spin 0.8s linear infinite',
           }}
         />
+      )}
+
+      {/* Stream Error Modal */}
+      {streamError && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(9, 9, 15, 0.94)',
+            backdropFilter: 'blur(16px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: 30,
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ fontSize: 20, fontWeight: 700, color: '#FFFFFF', marginBottom: 8 }}>
+            Lecture indisponible
+          </div>
+          <p style={{ fontSize: 14, color: '#9EA4B3', maxWidth: 360, marginBottom: 24 }}>
+            {streamError}
+          </p>
+          <div style={{ display: 'flex', gap: 14 }}>
+            <button
+              onClick={() => {
+                setStreamError(null);
+                setIsBuffering(true);
+                if (hlsRef.current && resolvedUrl) {
+                  hlsRef.current.loadSource(resolvedUrl);
+                  if (videoRef.current) hlsRef.current.attachMedia(videoRef.current);
+                }
+              }}
+              style={{
+                backgroundColor: '#E50914',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: 14,
+                padding: '12px 24px',
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Réessayer
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                color: '#FFFFFF',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: 14,
+                padding: '12px 24px',
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Transient Action Feedback Pop (Play, Pause, Seek) */}

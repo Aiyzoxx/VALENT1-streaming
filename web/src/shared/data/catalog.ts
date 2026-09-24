@@ -32,7 +32,7 @@ export async function fetchCatalog(): Promise<MediaItem[]> {
   if (!loadPromise) {
     loadPromise = (async () => {
       try {
-        const res = await fetch('/data/catalog.json');
+        const res = await fetch('/data/catalog.json', { cache: 'force-cache' });
         if (!res.ok) throw new Error(`Catalog load failed: ${res.status}`);
         const raw: MediaItem[] = await res.json();
         cachedCatalog = raw.map(item => ({

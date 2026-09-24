@@ -68,10 +68,17 @@ export function hasIncompatibleMediaTags(manifestText: string): boolean {
 
 export function toProxiedStreamUrl(streamUrl: string): string {
   if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
-  if (streamUrl.includes('finepulfe.xyz')) {
-    return streamUrl.replace(/^https?:\/\/[^\/]+/, '/api/proxy');
+  let target = streamUrl;
+
+  // Finepulfe series have broken .vtt syntax in master.m3u8; 720p/playlist.m3u8 has full audio+video multiplexed
+  if (target.includes('finepulfe.xyz') && /\/tv\/[^\/]+\/S\d+\/E\d+\/master\.m3u8/i.test(target)) {
+    target = target.replace(/\/master\.m3u8$/i, '/720p/playlist.m3u8');
   }
-  return streamUrl;
+
+  if (target.includes('finepulfe.xyz')) {
+    return target.replace(/^https?:\/\/[^\/]+/, '/api/proxy');
+  }
+  return target;
 }
 
 export async function resolvePlayableStreamUrl(streamUrl: string): Promise<string> {

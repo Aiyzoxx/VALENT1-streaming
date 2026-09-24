@@ -112,8 +112,6 @@ export const MobileHomeView: React.FC<MobileHomeViewProps> = ({
   }, [seriesByName, moviesByName]);
 
   const featuredSeries = useMemo(() => {
-    if (liveFeatured) return liveFeatured;
-
     const moneyHeistOriginal = catalog.find(
       (item) => item.id === '3695' || item.title.toLowerCase().includes('casa de papel')
     ) || catalog[0] || {
@@ -196,10 +194,14 @@ export const MobileHomeView: React.FC<MobileHomeViewProps> = ({
             'Growth is a group project. Otis and Maeve run an underground sex therapy clinic at school.',
         };
 
-    const others = catalog
-      .filter((item) => item.type === 'series' && item.id !== '3695' && item.id !== '3629' && item.id !== '3595')
-      .slice(0, 8);
-    return [luciferItem, moneyHeistItem, sexEdItem, ...others];
+    const initialHero = [luciferItem, moneyHeistItem, sexEdItem];
+    const liveOthers = liveFeatured
+      ? liveFeatured.filter((item) => item.id !== '3695' && item.id !== '3629' && item.id !== '3595')
+      : catalog
+          .filter((item) => item.type === 'series' && item.id !== '3695' && item.id !== '3629' && item.id !== '3595')
+          .slice(0, 8);
+
+    return [...initialHero, ...liveOthers];
   }, [catalog, liveFeatured]);
 
   const filteredCatalog = useMemo(() => {

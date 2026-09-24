@@ -54,6 +54,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
   const [subtitles, setSubtitles] = useState<{ id: number; name: string }[]>([]);
   const [currentSub, setCurrentSub] = useState(-1); // -1 = Off
   const [isBuffering, setIsBuffering] = useState(true);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>(streamUrl);
   const [seekingLeft, setSeekingLeft] = useState(false);
   const [seekingRight, setSeekingRight] = useState(false);
@@ -103,6 +104,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
         setIsBuffering(false);
+        setStreamError(null);
         const parsedLevels = data.levels.map((lvl, idx) => ({
           id: idx,
           label: `${lvl.height ? lvl.height + 'p' : Math.round(lvl.bitrate / 1000) + ' kbps'}`,
@@ -112,7 +114,13 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         if (initialTime > 0) {
           video.currentTime = initialTime;
         }
-        video.play().catch(() => setIsPlaying(false));
+        video.play()
+          .then(() => setIsPlaying(true))
+          .catch(() => {
+            // Autoplay was blocked by browser policy; reveal controls so user can tap
+            setIsPlaying(false);
+            setControlsVisible(true);
+          });
       });
 
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
@@ -128,6 +136,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
       });
 
       hls.on(Hls.Events.ERROR, (_, data) => {
+        console.warn('Mobile HLS Event Error:', data.type, data.details, 'fatal:', data.fatal);
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
@@ -137,7 +146,9 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
               hls.recoverMediaError();
               break;
             default:
-              hls.destroy();
+              setStreamError('Impossible de charger la vidéo. Vérifiez votre connexion.');
+              setIsBuffering(false);
+              setControlsVisible(true);
               break;
           }
         }
@@ -152,8 +163,19 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
       video.src = resolvedUrl;
       video.addEventListener('loadedmetadata', () => {
         setIsBuffering(false);
+        setStreamError(null);
         if (initialTime > 0) video.currentTime = initialTime;
-        video.play().catch(() => setIsPlaying(false));
+        video.play()
+          .then(() => setIsPlaying(true))
+          .catch(() => {
+            setIsPlaying(false);
+            setControlsVisible(true);
+          });
+      });
+      video.addEventListener('error', () => {
+        setStreamError('Erreur de lecture sur le lecteur vidéo.');
+        setIsBuffering(false);
+        setControlsVisible(true);
       });
     }
   }, [resolvedUrl, initialTime]);
@@ -287,7 +309,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
       />
 
       {/* Buffering spinner */}
-      {isBuffering && (
+      {isBuffering && !streamError && (
         <div
           style={{
             position: 'absolute',
@@ -299,6 +321,71 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
             animation: 'spin 0.8s linear infinite',
           }}
         />
+      )}
+
+      {/* Stream Error Modal */}
+      {streamError && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundColor: 'rgba(9, 9, 15, 0.94)',
+            backdropFilter: 'blur(16px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+            padding: 24,
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF', marginBottom: 8 }}>
+            Lecture indisponible
+          </div>
+          <p style={{ fontSize: 13, color: '#9EA4B3', maxWidth: 320, marginBottom: 20 }}>
+            {streamError}
+          </p>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button
+              onClick={() => {
+                setStreamError(null);
+                setIsBuffering(true);
+                if (hlsRef.current && resolvedUrl) {
+                  hlsRef.current.loadSource(resolvedUrl);
+                  if (videoRef.current) hlsRef.current.attachMedia(videoRef.current);
+                }
+              }}
+              style={{
+                backgroundColor: '#E50914',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: 12,
+                padding: '10px 20px',
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Réessayer
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                color: '#FFFFFF',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: 12,
+                padding: '10px 20px',
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Retour
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Top Bar Controls */}
