@@ -34,7 +34,7 @@ export const CoverflowCarousel: React.FC<CoverflowCarouselProps> = ({
     return () => window.removeEventListener('resize', updateSize);
   }, []);
 
-  // Update card 3D styles directly on DOM nodes without React re-renders (60/120fps)
+  // Update card styles directly on DOM nodes via GPU transform (scale + translate3d)
   const updateCardTransforms = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -46,13 +46,11 @@ export const CoverflowCarousel: React.FC<CoverflowCarouselProps> = ({
       const delta = (currentScroll - itemCenter) / snapInterval;
       const clampedDelta = Math.max(-1.5, Math.min(1.5, delta));
 
-      const rotateZ = clampedDelta * 6.5;
-      const rotateY = clampedDelta * 12;
-      const scale = 1 - Math.min(0.12, Math.abs(clampedDelta) * 0.12);
-      const translateY = Math.min(14, Math.abs(clampedDelta) * 12);
+      const scale = 1 - Math.min(0.14, Math.abs(clampedDelta) * 0.12);
+      const translateY = Math.min(10, Math.abs(clampedDelta) * 8);
       const opacity = 1 - Math.min(0.35, Math.abs(clampedDelta) * 0.28);
 
-      el.style.transform = `translate3d(0, ${translateY}px, 0) scale(${scale}) rotateY(${rotateY}deg) rotateZ(${rotateZ}deg)`;
+      el.style.transform = `translate3d(0, ${translateY}px, 0) scale(${scale})`;
       el.style.opacity = `${opacity}`;
     });
   }, [snapInterval]);
@@ -110,10 +108,10 @@ export const CoverflowCarousel: React.FC<CoverflowCarouselProps> = ({
     ) {
       return '/assets/figma/poster_money_heist.webp';
     }
-    if (item.id === 'lucifer-figma' || item.title?.toLowerCase() === 'lucifer') {
+    if (item.id === '3629' || item.id === 'lucifer-figma' || item.title?.toLowerCase() === 'lucifer') {
       return '/assets/figma/poster_lucifer.webp';
     }
-    if (item.id === 'sex-ed-figma' || item.title?.toLowerCase().includes('sex education')) {
+    if (item.id === '3595' || item.id === 'sex-ed-figma' || item.title?.toLowerCase().includes('sex education')) {
       return '/assets/figma/poster_sex_education.webp';
     }
     return optimizeImageUrl(item.posterUrl, 'poster');
@@ -134,11 +132,11 @@ export const CoverflowCarousel: React.FC<CoverflowCarouselProps> = ({
         overflowX: 'auto',
         scrollSnapType: 'x mandatory',
         WebkitOverflowScrolling: 'touch',
+        overscrollBehaviorX: 'contain',
         paddingLeft: `calc(50vw - ${cardWidth / 2}px)`,
         paddingRight: `calc(50vw - ${cardWidth / 2}px)`,
         paddingTop: 16,
         paddingBottom: 24,
-        perspective: '900px',
         scrollbarWidth: 'none',
         msOverflowStyle: 'none',
         cursor: 'grab',
@@ -169,15 +167,16 @@ export const CoverflowCarousel: React.FC<CoverflowCarouselProps> = ({
               height: cardHeight,
               marginRight: idx === items.length - 1 ? 0 : SPACING,
               scrollSnapAlign: 'center',
-              transformStyle: 'preserve-3d',
+              scrollSnapStop: 'normal',
               borderRadius: 28,
-              boxShadow: '0 16px 25px rgba(0, 0, 0, 0.7)',
+              boxShadow: '0 12px 24px rgba(0, 0, 0, 0.55)',
               overflow: 'hidden',
               position: 'relative',
               cursor: 'pointer',
               border: '1px solid rgba(255, 255, 255, 0.1)',
               willChange: 'transform, opacity',
               backgroundColor: '#1A1F29',
+              WebkitMaskImage: '-webkit-radial-gradient(white, black)',
             }}
           >
             <img

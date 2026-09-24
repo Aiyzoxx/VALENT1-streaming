@@ -124,39 +124,65 @@ export const DesktopHomeView: React.FC<DesktopHomeViewProps> = ({
   const featuredSeries = useMemo(() => {
     if (liveFeatured) return liveFeatured;
 
-    const luciferItem: MediaItem = {
-      id: 'lucifer-figma',
-      title: 'Lucifer',
-      type: 'series',
-      posterUrl: '',
-      backdropUrl: '',
-      quality: '1080p FHD',
-      duration: '45m',
-      ageRating: '16+',
-      genres: ['Crime', 'Drama', 'Fantasy'],
-      matchScore: 92,
-      year: 2021,
-      streamUrl: heroItem.streamUrl,
-      synopsis: "In the City of Angels, he's not one. Lucifer Morningstar abandons his throne in Hell to live in Los Angeles.",
-    };
+    const luciferOriginal = catalog.find(
+      (item) => item.id === '3629' || item.title.toLowerCase() === 'lucifer'
+    );
+    const luciferItem: MediaItem = luciferOriginal
+      ? {
+          ...luciferOriginal,
+          id: luciferOriginal.id,
+          title: 'Lucifer',
+          matchScore: 92,
+          quality: '1080p FHD',
+        }
+      : {
+          id: '3629',
+          title: 'Lucifer',
+          type: 'series',
+          posterUrl: '',
+          backdropUrl: '',
+          quality: '1080p FHD',
+          duration: '45m',
+          ageRating: '16+',
+          genres: ['Crime', 'Drama', 'Fantasy'],
+          matchScore: 92,
+          year: 2021,
+          streamUrl: heroItem.streamUrl,
+          synopsis:
+            "In the City of Angels, he's not one. Lucifer Morningstar abandons his throne in Hell to live in Los Angeles.",
+        };
 
-    const sexEdItem: MediaItem = {
-      id: 'sex-ed-figma',
-      title: 'Sex Education',
-      type: 'series',
-      posterUrl: '',
-      backdropUrl: '',
-      quality: '1080p FHD',
-      duration: '52m',
-      ageRating: '16+',
-      genres: ['Comedy', 'Drama'],
-      matchScore: 94,
-      year: 2021,
-      streamUrl: heroItem.streamUrl,
-      synopsis: 'Growth is a group project. Otis and Maeve run an underground sex therapy clinic at school.',
-    };
+    const sexEdOriginal = catalog.find(
+      (item) => item.id === '3595' || item.title.toLowerCase().includes('sex education')
+    );
+    const sexEdItem: MediaItem = sexEdOriginal
+      ? {
+          ...sexEdOriginal,
+          id: sexEdOriginal.id,
+          title: 'Sex Education',
+          matchScore: 94,
+          quality: '1080p FHD',
+        }
+      : {
+          id: '3595',
+          title: 'Sex Education',
+          type: 'series',
+          posterUrl: '',
+          backdropUrl: '',
+          quality: '1080p FHD',
+          duration: '52m',
+          ageRating: '16+',
+          genres: ['Comedy', 'Drama'],
+          matchScore: 94,
+          year: 2021,
+          streamUrl: heroItem.streamUrl,
+          synopsis:
+            'Growth is a group project. Otis and Maeve run an underground sex therapy clinic at school.',
+        };
 
-    const others = catalog.filter((item) => item.type === 'series' && item.id !== '3695').slice(0, 10);
+    const others = catalog
+      .filter((item) => item.type === 'series' && item.id !== '3695' && item.id !== '3629' && item.id !== '3595')
+      .slice(0, 8);
     return [heroItem, luciferItem, sexEdItem, ...others];
   }, [catalog, liveFeatured, heroItem]);
 

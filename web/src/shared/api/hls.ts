@@ -66,51 +66,15 @@ export function hasIncompatibleMediaTags(manifestText: string): boolean {
   return hasVttSubs || hasSeparateAudio;
 }
 
-export async function resolvePlayableStreamUrl(streamUrl: string, timeoutMs = 6000): Promise<string> {
+export function toProxiedStreamUrl(streamUrl: string): string {
   if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
-  if (!streamUrl.includes('.m3u8')) return streamUrl;
-
-  const cached = streamUrlCache.get(streamUrl);
-  if (cached) return cached;
-
-  if (streamUrl.includes('finepulfe.xyz') && /\/tv\/[^\/]+\/S\d+\/E\d+\/master\.m3u8/i.test(streamUrl)) {
-    const directVariant = streamUrl.replace(/\/master\.m3u8$/i, '/720p/playlist.m3u8');
-    streamUrlCache.set(streamUrl, directVariant);
-    return directVariant;
+  if (streamUrl.includes('finepulfe.xyz')) {
+    return streamUrl.replace(/^https?:\/\/[^\/]+/, '/api/proxy');
   }
+  return streamUrl;
+}
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(streamUrl, {
-      signal: ctrl.signal,
-      headers: { Accept: 'application/vnd.apple.mpegurl, application/x-mpegurl, */*' },
-    });
-    if (!res.ok) {
-      streamUrlCache.set(streamUrl, streamUrl);
-      return streamUrl;
-    }
-
-    const text = await res.text();
-    if (!text.includes('#EXT-X-STREAM-INF')) {
-      streamUrlCache.set(streamUrl, streamUrl);
-      return streamUrl;
-    }
-
-    if (hasIncompatibleMediaTags(text)) {
-      const variant = pickVariantUrl(text, streamUrl);
-      if (variant) {
-        streamUrlCache.set(streamUrl, variant);
-        return variant;
-      }
-    }
-
-    streamUrlCache.set(streamUrl, streamUrl);
-    return streamUrl;
-  } catch {
-    return streamUrl;
-  } finally {
-    clearTimeout(timer);
-  }
+export async function resolvePlayableStreamUrl(streamUrl: string): Promise<string> {
+  if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
+  return toProxiedStreamUrl(streamUrl);
 }
