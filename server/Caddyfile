@@ -1,5 +1,20 @@
-# Le DNS api.tribuneo.xyz doit pointer vers l'IP du VPS
-# AVANT le 1er démarrage (challenge HTTPS Let's Encrypt).
 api.tribuneo.xyz {
 	reverse_proxy pocketbase:8090
+}
+
+stream.tribuneo.xyz {
+	# Proxy de flux HLS vers finepulfe (contourne Cloudflare sans quota)
+	handle_path /api/proxy/* {
+		reverse_proxy https://free.finepulfe.xyz {
+			header_up Host free.finepulfe.xyz
+			header_up Referer "https://free.finepulfe.xyz/"
+			header_up -Origin
+			flush_interval -1
+		}
+	}
+
+	# Application Web StreamFlow (build Vite)
+	root * /var/www/dist
+	file_server
+	try_files {path} /index.html
 }
