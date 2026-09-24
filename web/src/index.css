@@ -1,0 +1,239 @@
+:root {
+  --color-bg: #09090F;
+  --color-bg-secondary: #131720;
+  --color-bg-blue: #04060C;
+  --color-card: #1A1F29;
+  --color-card-hover: #232938;
+  --color-filter-card: #2B303C;
+  --color-filter-card-active: #1E232F;
+  --color-search-bar: #191C24;
+  --color-overlay: rgba(9, 9, 15, 0.85);
+  --color-overlay-dark: rgba(0, 0, 0, 0.88);
+  
+  --color-primary: #FFFFFF;
+  --color-gold-star: #FFB800;
+  --color-match-green: #10B981;
+  --color-text-primary: #FFFFFF;
+  --color-text-secondary: #9EA4B3;
+  --color-text-muted: #7C8394;
+  
+  --color-nav-icon-active: #FFFFFF;
+  --color-nav-icon-inactive: #555C6E;
+  
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.08);
+  --color-border-medium: rgba(255, 255, 255, 0.12);
+  --color-border-active: rgba(255, 255, 255, 0.45);
+  --color-border-avatar: rgba(255, 255, 255, 0.25);
+  --color-search-border: #262B36;
+
+  --radius-sm: 8px;
+  --radius-card: 16px;
+  --radius-squircle: 18px;
+  --radius-hero-card: 28px;
+  --radius-full: 9999px;
+
+  --font-main: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-main);
+  font-size: 15px;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background-color: var(--color-bg-blue);
+}
+
+/* Ambient glow background replica */
+.ambient-glow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.ambient-glow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(ellipse 55% 28% at 82% 12%, rgba(58, 86, 158, 0.55), transparent 70%);
+}
+
+.ambient-glow::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(ellipse 60% 16% at 50% 73%, rgba(52, 76, 140, 0.35), transparent 70%),
+              radial-gradient(ellipse 30% 14% at 8% 94%, rgba(60, 88, 160, 0.4), transparent 70%);
+}
+
+/* Custom modern scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Buttons and interactive elements */
+button {
+  font-family: inherit;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  outline: none;
+}
+
+input {
+  font-family: inherit;
+  outline: none;
+  border: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Card tactile tap/click feedback */
+.media-poster-card:active {
+  transform: scale(0.92) !important;
+  filter: brightness(1.15) !important;
+  transition: transform 0.08s ease-out, filter 0.08s ease-out !important;
+}
+
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-detail-enter {
+  animation: modalSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Like Heart Pop Animation */
+@keyframes heartPop {
+  0% {
+    transform: scale(0.8);
+  }
+  35% {
+    transform: scale(1.48);
+    filter: drop-shadow(0 0 20px rgba(229, 9, 20, 0.95));
+  }
+  65% {
+    transform: scale(0.9);
+  }
+  85% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 8px rgba(229, 9, 20, 0.6));
+  }
+}
+
+.heart-pop-anim {
+  animation: heartPop 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* Player animations */
+@keyframes playCenterPop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  40% {
+    transform: scale(1.15);
+    opacity: 0.95;
+  }
+  75% {
+    transform: scale(1);
+    opacity: 0.95;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+.animate-play-pop {
+  animation: playCenterPop 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes spinSeekRight {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(45deg) scale(1.25); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+
+@keyframes spinSeekLeft {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(-45deg) scale(1.25); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+
+.animate-seek-right {
+  animation: spinSeekRight 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.animate-seek-left {
+  animation: spinSeekLeft 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes sheetSlideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-sheet-up {
+  animation: sheetSlideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
