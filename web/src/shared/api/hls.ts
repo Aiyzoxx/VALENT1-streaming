@@ -119,33 +119,27 @@ export async function fetchAndSanitizeStream(
     }
 
     const hasRawVtt = /#EXT-X-MEDIA:TYPE=SUBTITLES[^\r\n]+URI="[^"\r\n]+\.vtt"/i.test(text);
+    const baseUrl = proxied.substring(0, proxied.lastIndexOf('/') + 1);
+    const resolveUrl = (uri: string) => (/^https?:\/\//i.test(uri) ? uri : new URL(uri, baseUrl).toString());
 
     // Extraction des sous-titres
     const subtitles: ExternalSubtitle[] = [];
-    const baseUrl = proxied.substring(0, proxied.lastIndexOf('/') + 1);
-
-    const subRegex = /#EXT-X-MEDIA:TYPE=SUBTITLES[^\r\n]*/gi;
-    let match: RegExpExecArray | null;
+    const subMatches = text.matchAll(/#EXT-X-MEDIA:TYPE=SUBTITLES[^\r\n]*/gi);
     let subIdx = 0;
-    while ((match = subRegex.exec(text)) !== null) {
+    for (const match of subMatches) {
       const line = match[0];
-      const nameMatch = line.match(/NAME="([^"]+)"/i);
       const uriMatch = line.match(/URI="([^"]+)"/i);
+      if (!uriMatch || !uriMatch[1]) continue;
+
+      const nameMatch = line.match(/NAME="([^"]+)"/i);
       const langMatch = line.match(/LANGUAGE="([^"]+)"/i);
-      const isDefault = /DEFAULT=YES/i.test(line);
-      if (uriMatch && uriMatch[1]) {
-        const rawUri = uriMatch[1];
-        const absUri = /^https?:\/\//i.test(rawUri) ? rawUri : new URL(rawUri, baseUrl).toString();
-        const label = nameMatch ? nameMatch[1] : `Sous-titre ${subIdx + 1}`;
-        const lang = langMatch ? langMatch[1] : 'fr';
-        subtitles.push({
-          id: subIdx++,
-          label,
-          src: absUri,
-          lang,
-          isDefault,
-        });
-      }
+      subtitles.push({
+        id: subIdx++,
+        label: nameMatch ? nameMatch[1] : `Sous-titre ${subIdx}`,
+        src: resolveUrl(uriMatch[1]),
+        lang: langMatch ? langMatch[1] : 'fr',
+        isDefault: /DEFAULT=YES/i.test(line),
+      });
     }
 
     if (!hasRawVtt) {
@@ -163,13 +157,9 @@ export async function fetchAndSanitizeStream(
       const trimmed = l.trim();
       if (!trimmed) return l;
       if (trimmed.startsWith('#')) {
-        return l.replace(/URI="([^"]+)"/g, (m, uri) => {
-          if (/^https?:\/\//i.test(uri)) return m;
-          return `URI="${new URL(uri, baseUrl).toString()}"`;
-        });
+        return l.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${resolveUrl(uri)}"`);
       }
-      if (/^https?:\/\//i.test(trimmed)) return l;
-      return new URL(trimmed, baseUrl).toString();
+      return resolveUrl(trimmed);
     });
 
     const cleanedManifest = lines.join('\n');

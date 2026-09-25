@@ -73,6 +73,19 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
   const fallbackTriedRef = useRef(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const selectSubtitle = useCallback((subId: number) => {
+    if (hlsRef.current && hlsRef.current.subtitleTracks.length > 0) {
+      hlsRef.current.subtitleTrack = subId;
+    }
+    if (videoRef.current && videoRef.current.textTracks) {
+      for (let i = 0; i < videoRef.current.textTracks.length; i++) {
+        videoRef.current.textTracks[i].mode = (i === subId) ? 'showing' : 'disabled';
+      }
+    }
+    setCurrentSub(subId);
+    setShowSettings(false);
+  }, []);
+
   const resetHideTimer = useCallback(() => {
     setControlsVisible(true);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -102,9 +115,17 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
   // Resolve stream URL for incompatible playlists
   useEffect(() => {
     let alive = true;
+    let createdBlobUrl: string | null = null;
     fallbackTriedRef.current = false;
+
     fetchAndSanitizeStream(streamUrl).then((res) => {
-      if (!alive) return;
+      if (!alive) {
+        if (res.url.startsWith('blob:')) URL.revokeObjectURL(res.url);
+        return;
+      }
+      if (res.url.startsWith('blob:')) {
+        createdBlobUrl = res.url;
+      }
       setResolvedUrl(res.url);
       if (res.subtitles && res.subtitles.length > 0) {
         setExternalSubs(res.subtitles);
@@ -113,8 +134,12 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         if (def) setCurrentSub(def.id);
       }
     });
+
     return () => {
       alive = false;
+      if (createdBlobUrl) {
+        URL.revokeObjectURL(createdBlobUrl);
+      }
     };
   }, [streamUrl]);
 
@@ -908,16 +933,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
             {activeTab === 'subtitles' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <button
-                  onClick={() => {
-                    if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
-                    if (videoRef.current && videoRef.current.textTracks) {
-                      for (let i = 0; i < videoRef.current.textTracks.length; i++) {
-                        videoRef.current.textTracks[i].mode = 'disabled';
-                      }
-                    }
-                    setCurrentSub(-1);
-                    setShowSettings(false);
-                  }}
+                  onClick={() => selectSubtitle(-1)}
                   style={{
                     padding: '12px 16px',
                     borderRadius: 12,
@@ -935,17 +951,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
                 {subtitles.map((s) => (
                   <button
                     key={s.id}
-                    onClick={() => {
-                      if (hlsRef.current && hlsRef.current.subtitleTracks.length > 0) {
-                        hlsRef.current.subtitleTrack = s.id;
-                      } else if (videoRef.current && videoRef.current.textTracks) {
-                        for (let i = 0; i < videoRef.current.textTracks.length; i++) {
-                          videoRef.current.textTracks[i].mode = (i === s.id) ? 'showing' : 'disabled';
-                        }
-                      }
-                      setCurrentSub(s.id);
-                      setShowSettings(false);
-                    }}
+                    onClick={() => selectSubtitle(s.id)}
                     style={{
                       padding: '12px 16px',
                       borderRadius: 12,

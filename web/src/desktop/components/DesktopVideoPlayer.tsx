@@ -56,8 +56,6 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [levels, setLevels] = useState<{ id: number; label: string }[]>([]);
   const [currentLevel, setCurrentLevel] = useState(-1);
-  const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
-  const [currentAudio, setCurrentAudio] = useState(0);
   const [subtitles, setSubtitles] = useState<{ id: number; name: string }[]>([]);
   const [currentSub, setCurrentSub] = useState(-1);
   const [isBuffering, setIsBuffering] = useState(true);
@@ -73,6 +71,18 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
 
   const fallbackTriedRef = useRef(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const selectSubtitle = useCallback((subId: number) => {
+    if (hlsRef.current && hlsRef.current.subtitleTracks.length > 0) {
+      hlsRef.current.subtitleTrack = subId;
+    }
+    if (videoRef.current && videoRef.current.textTracks) {
+      for (let i = 0; i < videoRef.current.textTracks.length; i++) {
+        videoRef.current.textTracks[i].mode = (i === subId) ? 'showing' : 'disabled';
+      }
+    }
+    setCurrentSub(subId);
+  }, []);
 
   const resetHideTimer = useCallback(() => {
     setControlsVisible(true);
@@ -102,9 +112,17 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
 
   useEffect(() => {
     let alive = true;
+    let createdBlobUrl: string | null = null;
     fallbackTriedRef.current = false;
+
     fetchAndSanitizeStream(streamUrl).then((res) => {
-      if (!alive) return;
+      if (!alive) {
+        if (res.url.startsWith('blob:')) URL.revokeObjectURL(res.url);
+        return;
+      }
+      if (res.url.startsWith('blob:')) {
+        createdBlobUrl = res.url;
+      }
       setResolvedUrl(res.url);
       if (res.subtitles && res.subtitles.length > 0) {
         setExternalSubs(res.subtitles);
@@ -113,8 +131,12 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         if (def) setCurrentSub(def.id);
       }
     });
+
     return () => {
       alive = false;
+      if (createdBlobUrl) {
+        URL.revokeObjectURL(createdBlobUrl);
+      }
     };
   }, [streamUrl]);
 
@@ -151,11 +173,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
           });
       });
 
-      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
-        setAudioTracks(
-          data.audioTracks.map((t, idx) => ({ id: idx, name: t.name || t.lang || `Piste ${idx + 1}` }))
-        );
-      });
+
 
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
         setSubtitles(
@@ -850,15 +868,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <button
-                  onClick={() => {
-                    if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
-                    if (videoRef.current && videoRef.current.textTracks) {
-                      for (let i = 0; i < videoRef.current.textTracks.length; i++) {
-                        videoRef.current.textTracks[i].mode = 'disabled';
-                      }
-                    }
-                    setCurrentSub(-1);
-                  }}
+                  onClick={() => selectSubtitle(-1)}
                   style={{
                     padding: '6px 12px',
                     borderRadius: 8,
@@ -874,16 +884,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
                 {subtitles.map((s) => (
                   <button
                     key={s.id}
-                    onClick={() => {
-                      if (hlsRef.current && hlsRef.current.subtitleTracks.length > 0) {
-                        hlsRef.current.subtitleTrack = s.id;
-                      } else if (videoRef.current && videoRef.current.textTracks) {
-                        for (let i = 0; i < videoRef.current.textTracks.length; i++) {
-                          videoRef.current.textTracks[i].mode = (i === s.id) ? 'showing' : 'disabled';
-                        }
-                      }
-                      setCurrentSub(s.id);
-                    }}
+                    onClick={() => selectSubtitle(s.id)}
                     style={{
                       padding: '6px 12px',
                       borderRadius: 8,
