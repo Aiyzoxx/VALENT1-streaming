@@ -371,11 +371,9 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
     if (videoRef.current.paused) {
       videoRef.current.play();
       setIsPlaying(true);
-      setCenterFeedback({ type: 'play', key: Date.now() });
     } else {
       videoRef.current.pause();
       setIsPlaying(false);
-      setCenterFeedback({ type: 'pause', key: Date.now() });
     }
     resetHideTimer();
   };
@@ -703,8 +701,8 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         </div>
       </div>
 
-      {/* Transient Action Feedback Pop (Play, Pause, Seek) */}
-      {centerFeedback && (
+      {/* Transient Action Feedback Pop (Seek only) */}
+      {centerFeedback && (centerFeedback.type === 'seek-10' || centerFeedback.type === 'seek+10') && (
         <div
           key={centerFeedback.key}
           className="animate-play-pop"
@@ -729,8 +727,6 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
             boxShadow: '0 8px 30px rgba(0, 0, 0, 0.6)',
           }}
         >
-          {centerFeedback.type === 'play' && <IoPlay size={36} style={{ marginLeft: 3 }} />}
-          {centerFeedback.type === 'pause' && <IoPause size={36} />}
           {centerFeedback.type === 'seek-10' && (
             <>
               <IoReloadOutline size={26} style={{ transform: 'scaleX(-1)' }} />
@@ -962,7 +958,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="animate-sheet-up"
+            className="animate-sheet-up no-scrollbar"
             style={{
               backgroundColor: 'rgba(19, 23, 32, 0.96)',
               borderTopLeftRadius: 28,
@@ -970,23 +966,14 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
               borderTop: '1px solid rgba(255, 255, 255, 0.14)',
               borderLeft: '1px solid rgba(255, 255, 255, 0.08)',
               borderRight: '1px solid rgba(255, 255, 255, 0.08)',
-              padding: '12px 20px calc(env(safe-area-inset-bottom, 20px) + 20px)',
+              padding: '18px 20px calc(env(safe-area-inset-bottom, 20px) + 20px)',
               maxHeight: '76vh',
               overflowY: 'auto',
+              scrollbarWidth: 'none',
+              msOverflowStyle: 'none',
               boxShadow: '0 -10px 40px rgba(0, 0, 0, 0.7)',
             }}
           >
-            {/* Drag Handle Bar */}
-            <div
-              style={{
-                width: 40,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: 'rgba(255, 255, 255, 0.25)',
-                margin: '4px auto 16px auto',
-              }}
-            />
-
             {/* Header: Réglages + Close X */}
             <div
               style={{

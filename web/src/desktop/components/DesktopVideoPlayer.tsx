@@ -361,11 +361,9 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
     if (video.paused) {
       video.play();
       setIsPlaying(true);
-      setCenterFeedback({ type: 'play', key: Date.now() });
     } else {
       video.pause();
       setIsPlaying(false);
-      setCenterFeedback({ type: 'pause', key: Date.now() });
     }
     resetHideTimer();
   }, [resetHideTimer]);
@@ -639,8 +637,8 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Transient Action Feedback Pop (Play, Pause, Seek) */}
-      {centerFeedback && (
+      {/* Transient Action Feedback Pop (Seek only) */}
+      {centerFeedback && (centerFeedback.type === 'seek-10' || centerFeedback.type === 'seek+10') && (
         <div
           key={centerFeedback.key}
           className="animate-play-pop"
@@ -665,8 +663,6 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
             boxShadow: '0 12px 36px rgba(0, 0, 0, 0.6)',
           }}
         >
-          {centerFeedback.type === 'play' && <IoPlay size={44} style={{ marginLeft: 4 }} />}
-          {centerFeedback.type === 'pause' && <IoPause size={44} />}
           {centerFeedback.type === 'seek-10' && (
             <>
               <IoReloadOutline size={32} style={{ transform: 'scaleX(-1)' }} />
@@ -1065,30 +1061,21 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="animate-player-modal"
+            className="animate-player-modal no-scrollbar"
             style={{
               width: '100%',
               maxWidth: 440,
               backgroundColor: 'rgba(19, 23, 32, 0.96)',
               borderRadius: 28,
               border: '1px solid rgba(255, 255, 255, 0.14)',
-              padding: '20px 24px 28px',
+              padding: '22px 24px 28px',
               maxHeight: '80vh',
               overflowY: 'auto',
+              scrollbarWidth: 'none',
+              msOverflowStyle: 'none',
               boxShadow: '0 20px 60px rgba(0, 0, 0, 0.8)',
             }}
           >
-            {/* Drag Handle Bar aesthetic */}
-            <div
-              style={{
-                width: 40,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: 'rgba(255, 255, 255, 0.25)',
-                margin: '0 auto 16px auto',
-              }}
-            />
-
             {/* Header: Réglages + Close X */}
             <div
               style={{
