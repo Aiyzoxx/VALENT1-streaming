@@ -1,0 +1,38 @@
+name: Deploy Web to VPS
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build Web App
+        run: |
+          cd web
+          npm ci
+          npm run build
+          cd ..
+          tar -czf dist.tar.gz -C web dist
+
+      - name: Deploy to VPS
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        if: "${{ env.SSH_KEY != '' }}"
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H 82.38.134.128 >> ~/.ssh/known_hosts
+          scp -i ~/.ssh/id_rsa dist.tar.gz root@82.38.134.128:~/streamflow-server/
+          ssh -i ~/.ssh/id_rsa root@82.38.134.128 "cd ~/streamflow-server && rm -rf dist && tar -xzf dist.tar.gz && rm -f dist.tar.gz && docker compose restart caddy"
