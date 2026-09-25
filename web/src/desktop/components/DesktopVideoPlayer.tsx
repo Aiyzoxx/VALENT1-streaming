@@ -127,8 +127,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       if (res.subtitles && res.subtitles.length > 0) {
         setExternalSubs(res.subtitles);
         setSubtitles(res.subtitles.map((s) => ({ id: s.id, name: s.label })));
-        const def = res.subtitles.find((s) => s.isDefault);
-        if (def) setCurrentSub(def.id);
+        setCurrentSub(-1);
       }
     });
 
@@ -159,6 +158,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+        hls.subtitleTrack = -1;
         setIsBuffering(false);
         setStreamError(null);
         setLevels(
@@ -180,6 +180,9 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         setSubtitles(
           data.subtitleTracks.map((s, idx) => ({ id: idx, name: s.name || s.lang || `Sous-titre ${idx + 1}` }))
         );
+        if (currentSub === -1) {
+          hls.subtitleTrack = -1;
+        }
       });
 
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
