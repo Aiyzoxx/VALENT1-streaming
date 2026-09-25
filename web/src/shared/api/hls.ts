@@ -52,10 +52,20 @@ export function pickVariantUrl(masterText: string, baseUrl: string): string | nu
 
 export function toProxiedStreamUrl(streamUrl: string): string {
   if (!streamUrl || typeof streamUrl !== 'string') return streamUrl;
-  if (streamUrl.startsWith('/api/proxy')) return streamUrl;
+  if (streamUrl.startsWith('/api/proxy') || streamUrl.startsWith('https://api.tribuneo.xyz/api/proxy')) {
+    return streamUrl;
+  }
+
+  const isDirectProxyHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname.includes('tribuneo.xyz') ||
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1');
+
+  const proxyBase = isDirectProxyHost ? '/api/proxy' : 'https://api.tribuneo.xyz/api/proxy';
 
   if (streamUrl.includes('finepulfe.xyz') || streamUrl.includes('purstream')) {
-    return streamUrl.replace(/^https?:\/\/[^\/]+/, '/api/proxy');
+    return streamUrl.replace(/^https?:\/\/[^\/]+/, proxyBase);
   }
   return streamUrl;
 }
