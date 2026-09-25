@@ -153,6 +153,8 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         enableWorker: true,
         lowLatencyMode: Boolean(isLive),
         backBufferLength: 90,
+        maxBufferSize: 50 * 1000 * 1000,
+        renderTextTracksNatively: false,
       });
 
       hlsRef.current = hls;
