@@ -1,15 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Hls from 'hls.js';
 import {
-  IoArrowBack,
+  IoClose,
   IoPlay,
   IoPause,
+  IoPlayBack,
+  IoPlayForward,
   IoVolumeHigh,
   IoVolumeMute,
   IoSettingsOutline,
   IoExpandOutline,
   IoContractOutline,
-  IoTvOutline,
+  IoChatbubbleEllipsesOutline,
+  IoScanOutline,
+  IoCropOutline,
+  IoCheckmarkCircle,
+  IoEllipseOutline,
+  IoChevronDown,
   IoReloadOutline,
 } from 'react-icons/io5';
 import { formatTime } from '../../shared/utils/format';
@@ -17,7 +24,6 @@ import {
   fetchAndSanitizeStream,
   resolvePlayableStreamUrl,
   resolveVariantUrl,
-  toProxiedStreamUrl,
   ExternalSubtitle,
 } from '../../shared/api/hls';
 
@@ -31,7 +37,95 @@ interface DesktopVideoPlayerProps {
   onProgressUpdate?: (currentTime: number, duration: number) => void;
 }
 
+type SettingsTab = 'quality' | 'speed' | 'audio';
+
 const SPEED_OPTIONS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
+interface OptionRowProps {
+  index: number;
+  selected: boolean;
+  title: string;
+  description: string;
+  badge: string;
+  onPress: () => void;
+}
+
+const OptionRow: React.FC<OptionRowProps> = ({
+  index,
+  selected,
+  title,
+  description,
+  badge,
+  onPress,
+}) => (
+  <button
+    onClick={onPress}
+    className="animate-option-stagger"
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '13px 15px',
+      borderRadius: 18,
+      backgroundColor: selected ? '#1E2330' : 'rgba(255, 255, 255, 0.05)',
+      border: selected ? '1.5px solid rgba(255, 255, 255, 0.35)' : '1px solid rgba(255, 255, 255, 0.08)',
+      cursor: 'pointer',
+      width: '100%',
+      textAlign: 'left',
+      transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
+      animationDelay: `${Math.min(index, 8) * 35}ms`,
+    }}
+  >
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
+      {selected ? (
+        <IoCheckmarkCircle size={21} style={{ color: '#FFFFFF', flexShrink: 0 }} />
+      ) : (
+        <IoEllipseOutline size={21} style={{ color: '#7C8394', flexShrink: 0 }} />
+      )}
+      <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: selected ? 700 : 600,
+            color: '#FFFFFF',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: '#9EA4B3',
+            marginTop: 2,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {description}
+        </div>
+      </div>
+    </div>
+    <div
+      style={{
+        padding: '3px 9px',
+        borderRadius: 8,
+        backgroundColor: selected ? '#FFFFFF' : '#222631',
+        color: selected ? '#09090F' : '#9EA4B3',
+        fontSize: 11,
+        fontWeight: 800,
+        letterSpacing: '0.04em',
+        flexShrink: 0,
+      }}
+    >
+      {badge}
+    </div>
+  </button>
+);
 
 export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   streamUrl,
@@ -53,9 +147,13 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [activeTab, setActiveTab] = useState<SettingsTab>('quality');
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [contentFit, setContentFit] = useState<'contain' | 'cover'>('contain');
   const [levels, setLevels] = useState<{ id: number; label: string }[]>([]);
   const [currentLevel, setCurrentLevel] = useState(-1);
+  const [audioTracks, setAudioTracks] = useState<{ id: number; name: string }[]>([]);
+  const [currentAudio, setCurrentAudio] = useState(0);
   const [subtitles, setSubtitles] = useState<{ id: number; name: string }[]>([]);
   const [currentSub, setCurrentSub] = useState(-1);
   const [isBuffering, setIsBuffering] = useState(true);
@@ -73,12 +171,12 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selectSubtitle = useCallback((subId: number) => {
-    if (hlsRef.current && hlsRef.current.subtitleTracks.length > 0) {
+    if (hlsRef.current) {
       hlsRef.current.subtitleTrack = subId;
     }
     if (videoRef.current && videoRef.current.textTracks) {
       for (let i = 0; i < videoRef.current.textTracks.length; i++) {
-        videoRef.current.textTracks[i].mode = (i === subId) ? 'showing' : 'disabled';
+        videoRef.current.textTracks[i].mode = i === subId ? 'showing' : 'disabled';
       }
     }
     setCurrentSub(subId);
@@ -168,12 +266,17 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
           }))
         );
         if (initialTime > 0) video.currentTime = initialTime;
-        video.play()
+        video
+          .play()
           .then(() => setIsPlaying(true))
           .catch(() => {
             setIsPlaying(false);
             setControlsVisible(true);
           });
+      });
+
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
+        setAudioTracks(data.audioTracks.map((t, idx) => ({ id: idx, name: t.name || t.lang || `Piste ${idx + 1}` })));
       });
 
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
@@ -225,7 +328,8 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         setIsBuffering(false);
         setStreamError(null);
         if (initialTime > 0) video.currentTime = initialTime;
-        video.play()
+        video
+          .play()
           .then(() => setIsPlaying(true))
           .catch(() => {
             setIsPlaying(false);
@@ -252,42 +356,40 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   }, [resolvedUrl, initialTime, tryFallbackVariant]);
 
   const togglePlay = useCallback(() => {
-    if (!videoRef.current) return;
-    if (videoRef.current.paused) {
-      videoRef.current.play();
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play();
       setIsPlaying(true);
       setCenterFeedback({ type: 'play', key: Date.now() });
     } else {
-      videoRef.current.pause();
+      video.pause();
       setIsPlaying(false);
       setCenterFeedback({ type: 'pause', key: Date.now() });
     }
     resetHideTimer();
   }, [resetHideTimer]);
 
-  const seek = useCallback((delta: number) => {
-    if (!videoRef.current) return;
-    const target = Math.max(0, Math.min(duration, videoRef.current.currentTime + delta));
-    videoRef.current.currentTime = target;
-    setCurrentTime(target);
-    if (delta > 0) {
-      setSeekingRight(true);
-      setCenterFeedback({ type: 'seek+10', key: Date.now() });
-      setTimeout(() => setSeekingRight(false), 350);
-    } else {
-      setSeekingLeft(true);
-      setCenterFeedback({ type: 'seek-10', key: Date.now() });
-      setTimeout(() => setSeekingLeft(false), 350);
-    }
-    resetHideTimer();
-  }, [duration, resetHideTimer]);
-
-  const toggleMute = useCallback(() => {
-    if (!videoRef.current) return;
-    const nextMute = !isMuted;
-    videoRef.current.muted = nextMute;
-    setIsMuted(nextMute);
-  }, [isMuted]);
+  const seek = useCallback(
+    (secondsDelta: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      const target = Math.max(0, Math.min(duration, video.currentTime + secondsDelta));
+      video.currentTime = target;
+      setCurrentTime(target);
+      if (secondsDelta > 0) {
+        setSeekingRight(true);
+        setCenterFeedback({ type: 'seek+10', key: Date.now() });
+        setTimeout(() => setSeekingRight(false), 350);
+      } else {
+        setSeekingLeft(true);
+        setCenterFeedback({ type: 'seek-10', key: Date.now() });
+        setTimeout(() => setSeekingLeft(false), 350);
+      }
+      resetHideTimer();
+    },
+    [duration, resetHideTimer]
+  );
 
   const toggleFullscreen = useCallback(() => {
     const container = document.getElementById('desktop-player-container');
@@ -302,51 +404,32 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
     }
   }, []);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+  const toggleContentFit = () => {
+    setContentFit((prev) => (prev === 'contain' ? 'cover' : 'contain'));
+  };
 
-      if (e.code === 'Space' || e.key === 'k') {
-        e.preventDefault();
-        togglePlay();
-      } else if (e.key === 'ArrowLeft' || e.key === 'j') {
-        e.preventDefault();
-        seek(-10);
-      } else if (e.key === 'ArrowRight' || e.key === 'l') {
-        e.preventDefault();
-        seek(10);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        if (videoRef.current) {
-          const v = Math.min(1, videoRef.current.volume + 0.1);
-          videoRef.current.volume = v;
-          setVolume(v);
-          setIsMuted(false);
-        }
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        if (videoRef.current) {
-          const v = Math.max(0, videoRef.current.volume - 0.1);
-          videoRef.current.volume = v;
-          setVolume(v);
-        }
-      } else if (e.key === 'm') {
-        e.preventDefault();
-        toggleMute();
-      } else if (e.key === 'f') {
-        e.preventDefault();
-        toggleFullscreen();
-      } else if (e.key === 'Escape') {
-        if (!document.fullscreenElement) {
-          onClose();
-        }
+  const handleVolumeChange = (newVol: number) => {
+    setVolume(newVol);
+    setIsMuted(newVol === 0);
+    if (videoRef.current) {
+      videoRef.current.volume = newVol;
+      videoRef.current.muted = newVol === 0;
+    }
+  };
+
+  const toggleMute = () => {
+    if (isMuted) {
+      setIsMuted(false);
+      const v = volume || 1;
+      if (videoRef.current) {
+        videoRef.current.muted = false;
+        videoRef.current.volume = v;
       }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [togglePlay, seek, toggleMute, toggleFullscreen, onClose]);
+    } else {
+      setIsMuted(true);
+      if (videoRef.current) videoRef.current.muted = true;
+    }
+  };
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
@@ -354,7 +437,9 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       const dur = videoRef.current.duration || 0;
       setCurrentTime(cur);
       setDuration(dur);
-      if (onProgressUpdate) onProgressUpdate(cur, dur);
+      if (onProgressUpdate) {
+        onProgressUpdate(cur, dur);
+      }
     }
   };
 
@@ -365,20 +450,65 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
     resetHideTimer();
   };
 
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value);
-    setVolume(val);
-    if (videoRef.current) {
-      videoRef.current.volume = val;
-      videoRef.current.muted = val === 0;
-      setIsMuted(val === 0);
-    }
-  };
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+
+      switch (e.code) {
+        case 'Space':
+        case 'KeyK':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'ArrowLeft':
+        case 'KeyJ':
+          e.preventDefault();
+          seek(-10);
+          break;
+        case 'ArrowRight':
+        case 'KeyL':
+          e.preventDefault();
+          seek(10);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          handleVolumeChange(Math.min(1, volume + 0.1));
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          handleVolumeChange(Math.max(0, volume - 0.1));
+          break;
+        case 'KeyM':
+          e.preventDefault();
+          toggleMute();
+          break;
+        case 'KeyF':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 'Escape':
+          e.preventDefault();
+          if (showSettings) {
+            setShowSettings(false);
+          } else {
+            onClose();
+          }
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [togglePlay, seek, volume, toggleFullscreen, showSettings, onClose]);
+
+  const bestLevel = levels.length > 0 ? levels[levels.length - 1] : null;
 
   return (
     <div
       id="desktop-player-container"
       onMouseMove={resetHideTimer}
+      onClick={resetHideTimer}
       style={{
         position: 'fixed',
         inset: 0,
@@ -406,7 +536,8 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         style={{
           width: '100%',
           height: '100%',
-          objectFit: 'contain',
+          objectFit: contentFit,
+          transition: 'object-fit 0.2s ease',
         }}
       >
         {externalSubs.map((s) => (
@@ -416,7 +547,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
             label={s.label}
             src={s.src}
             srcLang={s.lang}
-            default={currentSub === s.id}
+            default={false}
           />
         ))}
       </video>
@@ -551,7 +682,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Top Bar Controls */}
+      {/* Top Bar Controls (Screenshot 4 replica: Close X, Title, Subtitle, Quality Pill HD ⌵, Volume, Settings) */}
       <div
         style={{
           position: 'absolute',
@@ -562,65 +693,228 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
           background: 'linear-gradient(to bottom, rgba(0, 0, 0, 0.85) 0%, transparent 100%)',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          gap: 16,
           opacity: controlsVisible ? 1 : 0,
           pointerEvents: controlsVisible ? 'auto' : 'none',
           transition: 'opacity 0.25s ease',
           zIndex: 10,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <button
-            onClick={onClose}
+        <button
+          onClick={onClose}
+          className="player-glass-btn"
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: 22,
+            flexShrink: 0,
+          }}
+          title="Fermer (Échap)"
+        >
+          <IoClose size={22} />
+        </button>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
             style={{
-              width: 44,
-              height: 44,
-              borderRadius: '50%',
-              backgroundColor: 'rgba(255, 255, 255, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
+              fontSize: 18,
+              fontWeight: 800,
               color: '#FFFFFF',
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+              letterSpacing: '-0.01em',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
             }}
           >
-            <IoArrowBack size={24} />
-          </button>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#FFFFFF' }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 13, color: '#9EA4B3' }}>{subtitle}</div>}
+            {title}
           </div>
+          {subtitle && (
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#9EA4B3',
+                marginTop: 2,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {subtitle}
+            </div>
+          )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+          {isLive ? (
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                backgroundColor: '#FFFFFF',
+                color: '#09090F',
+                padding: '6px 14px',
+                borderRadius: 9999,
+                fontSize: 12,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+              }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#10B981' }} />
+              DIRECT
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                setActiveTab('quality');
+                setShowSettings(true);
+                setControlsVisible(true);
+              }}
+              className="player-glass-btn"
+              style={{
+                height: 40,
+                padding: '0 14px',
+                borderRadius: 20,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+              title="Changer la qualité"
+            >
+              <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: '0.04em' }}>
+                {currentLevel === -1 ? 'AUTO' : levels.find((l) => l.id === currentLevel)?.label || 'HD'}
+              </span>
+              <IoChevronDown size={13} style={{ color: '#9EA4B3' }} />
+            </button>
+          )}
+
+          {/* Volume Control on Desktop */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              backgroundColor: 'rgba(255, 255, 255, 0.1)',
+              border: '1px solid rgba(255, 255, 255, 0.16)',
+              borderRadius: 20,
+              padding: '0 12px',
+              height: 40,
+              backdropFilter: 'blur(16px)',
+            }}
+          >
+            <button
+              onClick={toggleMute}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#FFFFFF',
+                cursor: 'pointer',
+              }}
+            >
+              {isMuted || volume === 0 ? <IoVolumeMute size={20} /> : <IoVolumeHigh size={20} />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.02}
+              value={isMuted ? 0 : volume}
+              onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+              style={{
+                width: 70,
+                accentColor: '#FFFFFF',
+                cursor: 'pointer',
+                height: 4,
+              }}
+            />
+          </div>
+
           <button
-            onClick={() => setShowSettings(!showSettings)}
-            title="Réglages (Qualité, Audio, Sous-titres)"
+            onClick={() => {
+              setShowSettings(!showSettings);
+              setControlsVisible(true);
+            }}
+            className="player-glass-btn"
             style={{
               width: 44,
               height: 44,
-              borderRadius: '50%',
-              backgroundColor: 'rgba(255, 255, 255, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#FFFFFF',
-              cursor: 'pointer',
+              borderRadius: 22,
             }}
+            title="Réglages"
           >
-            <IoSettingsOutline size={22} />
+            <IoSettingsOutline size={21} />
           </button>
         </div>
       </div>
 
-      {/* Bottom Bar Controls */}
+      {/* Center Controls (Screenshot 4 exact layout: Seek -10s, Giant White Play/Pause, Seek +10s) */}
+      <div
+        style={{
+          position: 'absolute',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 32,
+          opacity: controlsVisible ? 1 : 0,
+          pointerEvents: controlsVisible ? 'auto' : 'none',
+          transition: 'opacity 0.25s ease',
+          zIndex: 10,
+        }}
+      >
+        {!isLive && (
+          <button
+            onClick={() => seek(-10)}
+            className={`player-glass-btn ${seekingLeft ? 'animate-seek-left' : ''}`}
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: 32,
+              flexDirection: 'column',
+              gap: 2,
+            }}
+            title="Reculer de 10s (Flèche Gauche)"
+          >
+            <IoPlayBack size={24} />
+            <span style={{ fontSize: 11, fontWeight: 800 }}>10s</span>
+          </button>
+        )}
+
+        <button
+          onClick={togglePlay}
+          className="player-main-play-btn"
+          style={{
+            width: 84,
+            height: 84,
+          }}
+          title={isPlaying ? 'Pause (Espace)' : 'Lecture (Espace)'}
+        >
+          {isPlaying ? <IoPause size={38} /> : <IoPlay size={38} style={{ marginLeft: 4 }} />}
+        </button>
+
+        {!isLive && (
+          <button
+            onClick={() => seek(10)}
+            className={`player-glass-btn ${seekingRight ? 'animate-seek-right' : ''}`}
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: 32,
+              flexDirection: 'column',
+              gap: 2,
+            }}
+            title="Avancer de 10s (Flèche Droite)"
+          >
+            <IoPlayForward size={24} />
+            <span style={{ fontSize: 11, fontWeight: 800 }}>10s</span>
+          </button>
+        )}
+      </div>
+
+      {/* Bottom Bar Controls (Screenshot 4 exact layout) */}
       <div
         style={{
           position: 'absolute',
@@ -638,281 +932,400 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
           zIndex: 10,
         }}
       >
-        {/* Scrubber slider */}
-        <input
-          type="range"
-          min={0}
-          max={duration || 100}
-          step={0.1}
-          value={currentTime}
-          onChange={handleScrub}
-          style={{
-            width: '100%',
-            accentColor: '#FFFFFF',
-            height: 5,
-            cursor: 'pointer',
-          }}
-        />
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          {/* Left Controls: Play/Pause, Seek +/- 10s, Volume, Time */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-            <button
-              onClick={togglePlay}
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: '50%',
-                backgroundColor: '#FFFFFF',
-                color: '#09090F',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-              }}
-            >
-              {isPlaying ? <IoPause size={22} /> : <IoPlay size={22} style={{ marginLeft: 2 }} />}
-            </button>
-
-            <button
-              onClick={() => seek(-10)}
-              title="Reculer de 10s (Flèche Gauche)"
-              className={seekingLeft ? 'animate-seek-left' : ''}
+        {/* Scrubber row with Pill Thumb */}
+        {!isLive && duration > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <span
               style={{
                 color: '#FFFFFF',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                transition: 'transform 0.15s ease',
+                fontSize: 13,
+                fontWeight: 700,
+                minWidth: 48,
+                textAlign: 'center',
+                fontVariantNumeric: 'tabular-nums',
               }}
             >
-              <IoReloadOutline size={24} style={{ transform: 'scaleX(-1)' }} />
-            </button>
-
-            <button
-              onClick={() => seek(10)}
-              title="Avancer de 10s (Flèche Droite)"
-              className={seekingRight ? 'animate-seek-right' : ''}
-              style={{
-                color: '#FFFFFF',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                transition: 'transform 0.15s ease',
-              }}
-            >
-              <IoReloadOutline size={24} />
-            </button>
-
-            {/* Volume control */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button
-                onClick={toggleMute}
-                style={{ color: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-              >
-                {isMuted || volume === 0 ? <IoVolumeMute size={22} /> : <IoVolumeHigh size={22} />}
-              </button>
+              {formatTime(currentTime)}
+            </span>
+            <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
               <input
                 type="range"
                 min={0}
-                max={1}
-                step={0.05}
-                value={isMuted ? 0 : volume}
-                onChange={handleVolumeChange}
-                style={{
-                  width: 80,
-                  accentColor: '#FFFFFF',
-                  cursor: 'pointer',
-                }}
+                max={duration || 100}
+                step={0.1}
+                value={currentTime}
+                onChange={handleScrub}
+                className="ios-video-scrubber"
+                style={
+                  {
+                    '--track-bg': `linear-gradient(to right, #FFFFFF 0%, #FFFFFF ${(currentTime / (duration || 1)) * 100}%, rgba(255, 255, 255, 0.22) ${(currentTime / (duration || 1)) * 100}%, rgba(255, 255, 255, 0.22) 100%)`,
+                  } as React.CSSProperties
+                }
               />
             </div>
-
-            {/* Time readout */}
-            <div style={{ fontSize: 13, color: '#9EA4B3', marginLeft: 8 }}>
-              {isLive ? (
-                <span style={{ color: '#E50914', fontWeight: 700 }}>• EN DIRECT</span>
-              ) : (
-                <span>
-                  {formatTime(currentTime)} / {formatTime(duration)}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Right Controls: Fullscreen, PiP */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <button
-              onClick={async () => {
-                if (videoRef.current) {
-                  try {
-                    await videoRef.current.requestPictureInPicture();
-                  } catch (e) {
-                    console.warn(e);
-                  }
-                }
+            <span
+              style={{
+                color: '#FFFFFF',
+                fontSize: 13,
+                fontWeight: 700,
+                minWidth: 48,
+                textAlign: 'center',
+                fontVariantNumeric: 'tabular-nums',
               }}
-              title="Picture-in-Picture"
-              style={{ color: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
             >
-              <IoTvOutline size={22} />
-            </button>
-
-            <button
-              onClick={toggleFullscreen}
-              title="Plein écran (F)"
-              style={{ color: '#FFFFFF', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-            >
-              {isFullscreen ? <IoContractOutline size={24} /> : <IoExpandOutline size={24} />}
-            </button>
+              {formatTime(duration)}
+            </span>
           </div>
+        )}
+
+        {/* Actions Row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Audio & Sous-titres */}
+          <button
+            onClick={() => {
+              setActiveTab('audio');
+              setShowSettings(true);
+              setControlsVisible(true);
+            }}
+            className="player-glass-btn"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 21,
+            }}
+            title="Audio & Sous-titres"
+          >
+            <IoChatbubbleEllipsesOutline size={19} />
+          </button>
+
+          {/* Vitesse */}
+          <button
+            onClick={() => {
+              setActiveTab('speed');
+              setShowSettings(true);
+              setControlsVisible(true);
+            }}
+            className="player-glass-btn"
+            style={{
+              height: 42,
+              padding: '0 16px',
+              borderRadius: 21,
+            }}
+            title="Vitesse de lecture"
+          >
+            <span style={{ fontSize: 14, fontWeight: 800 }}>{playbackSpeed}x</span>
+          </button>
+
+          <div style={{ flex: 1 }} />
+
+          {/* Aspect / Format Cinéma */}
+          <button
+            onClick={toggleContentFit}
+            className="player-glass-btn"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 21,
+            }}
+            title={contentFit === 'contain' ? 'Format cinéma' : 'Plein écran zoomé'}
+          >
+            {contentFit === 'contain' ? <IoScanOutline size={19} /> : <IoCropOutline size={19} />}
+          </button>
+
+          {/* Fullscreen */}
+          <button
+            onClick={toggleFullscreen}
+            className="player-glass-btn"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 21,
+            }}
+            title={isFullscreen ? 'Quitter plein écran (F)' : 'Plein écran (F)'}
+          >
+            {isFullscreen ? <IoContractOutline size={19} /> : <IoExpandOutline size={19} />}
+          </button>
         </div>
       </div>
 
-      {/* Settings Modal (Right slide panel on desktop) */}
+      {/* Settings Modal (Desktop Floating Card matching Screenshots 1, 2, 3) */}
       {showSettings && (
         <div
-          onClick={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            top: 80,
-            right: 36,
-            width: 320,
-            backgroundColor: '#1A1F29',
-            borderRadius: 18,
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-            padding: 20,
-            boxShadow: '0 16px 32px rgba(0, 0, 0, 0.7)',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(12px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
             zIndex: 100,
           }}
+          onClick={() => setShowSettings(false)}
         >
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#FFFFFF', marginBottom: 14 }}>
-            Réglages de lecture
-          </div>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="animate-player-modal"
+            style={{
+              width: '100%',
+              maxWidth: 440,
+              backgroundColor: 'rgba(19, 23, 32, 0.96)',
+              borderRadius: 28,
+              border: '1px solid rgba(255, 255, 255, 0.14)',
+              padding: '20px 24px 28px',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.8)',
+            }}
+          >
+            {/* Drag Handle Bar aesthetic */}
+            <div
+              style={{
+                width: 40,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: 'rgba(255, 255, 255, 0.25)',
+                margin: '0 auto 16px auto',
+              }}
+            />
 
-          {/* Speed */}
-          <div style={{ marginBottom: 18 }}>
-            <div style={{ fontSize: 12, color: '#9EA4B3', fontWeight: 600, marginBottom: 8 }}>
-              Vitesse de lecture
+            {/* Header: Réglages + Close X */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 18,
+              }}
+            >
+              <span style={{ fontSize: 20, fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.02em' }}>
+                Réglages
+              </span>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="player-glass-btn"
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                }}
+                title="Fermer"
+              >
+                <IoClose size={18} />
+              </button>
             </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {SPEED_OPTIONS.map((spd) => (
-                <button
-                  key={spd}
-                  onClick={() => {
-                    setPlaybackSpeed(spd);
-                    if (videoRef.current) videoRef.current.playbackRate = spd;
-                  }}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 8,
-                    backgroundColor: playbackSpeed === spd ? '#FFFFFF' : '#2B303C',
-                    color: playbackSpeed === spd ? '#09090F' : '#FFFFFF',
-                    fontSize: 12,
-                    fontWeight: playbackSpeed === spd ? 700 : 500,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {spd}x
-                </button>
-              ))}
-            </div>
-          </div>
 
-          {/* Quality */}
-          {levels.length > 0 && (
-            <div style={{ marginBottom: 18 }}>
-              <div style={{ fontSize: 12, color: '#9EA4B3', fontWeight: 600, marginBottom: 8 }}>
-                Qualité vidéo
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => {
+            {/* Segmented Pill Tabs (Screenshots 1, 2, 3) */}
+            <div
+              style={{
+                display: 'flex',
+                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: 9999,
+                padding: 4,
+                marginBottom: 18,
+              }}
+            >
+              {[
+                { id: 'quality', label: 'Qualité' },
+                { id: 'speed', label: `Vitesse · ${playbackSpeed}x` },
+                { id: 'audio', label: 'Audio' },
+              ].map((tab) => {
+                const active = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id as SettingsTab)}
+                    style={{
+                      flex: 1,
+                      padding: '9px 0',
+                      fontSize: 13,
+                      fontWeight: active ? 700 : 600,
+                      color: active ? '#FFFFFF' : '#9EA4B3',
+                      backgroundColor: active ? '#222631' : 'transparent',
+                      border: active ? '1px solid rgba(255, 255, 255, 0.16)' : '1px solid transparent',
+                      borderRadius: 9999,
+                      transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+                      textAlign: 'center',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Tab 1: Qualité (Screenshot 1 replica) */}
+            {activeTab === 'quality' && (
+              <div key="quality" className="animate-tab-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <OptionRow
+                  index={0}
+                  selected={currentLevel !== -1}
+                  title={bestLevel ? `${bestLevel.label} · Source` : 'Qualité source · Source'}
+                  description="Détection en cours"
+                  badge="HD"
+                  onPress={() => {
+                    if (levels.length > 0) {
+                      const highest = levels[levels.length - 1];
+                      if (hlsRef.current) hlsRef.current.currentLevel = highest.id;
+                      setCurrentLevel(highest.id);
+                    }
+                  }}
+                />
+
+                <OptionRow
+                  index={1}
+                  selected={currentLevel === -1}
+                  title="Auto · Adaptatif"
+                  description="Ajuste le débit selon la connexion"
+                  badge="AUTO"
+                  onPress={() => {
                     if (hlsRef.current) hlsRef.current.currentLevel = -1;
                     setCurrentLevel(-1);
                   }}
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 8,
-                    backgroundColor: currentLevel === -1 ? '#FFFFFF' : '#2B303C',
-                    color: currentLevel === -1 ? '#09090F' : '#FFFFFF',
-                    fontSize: 12,
-                    fontWeight: currentLevel === -1 ? 700 : 500,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Auto
-                </button>
-                {levels.map((lvl) => (
-                  <button
-                    key={lvl.id}
-                    onClick={() => {
-                      if (hlsRef.current) hlsRef.current.currentLevel = lvl.id;
-                      setCurrentLevel(lvl.id);
-                    }}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 8,
-                      backgroundColor: currentLevel === lvl.id ? '#FFFFFF' : '#2B303C',
-                      color: currentLevel === lvl.id ? '#09090F' : '#FFFFFF',
-                      fontSize: 12,
-                      fontWeight: currentLevel === lvl.id ? 700 : 500,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {lvl.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+                />
 
-          {/* Subtitles */}
-          {subtitles.length > 0 && (
-            <div>
-              <div style={{ fontSize: 12, color: '#9EA4B3', fontWeight: 600, marginBottom: 8 }}>
-                Sous-titres
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => selectSubtitle(-1)}
+                <div
                   style={{
-                    padding: '6px 12px',
-                    borderRadius: 8,
-                    backgroundColor: currentSub === -1 ? '#FFFFFF' : '#2B303C',
-                    color: currentSub === -1 ? '#09090F' : '#FFFFFF',
-                    fontSize: 12,
-                    fontWeight: currentSub === -1 ? 700 : 500,
-                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#7C8394',
+                    marginTop: 8,
+                    marginBottom: 2,
                   }}
                 >
-                  Désactivé
-                </button>
-                {subtitles.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => selectSubtitle(s.id)}
+                  Affichage
+                </div>
+
+                <OptionRow
+                  index={2}
+                  selected={false}
+                  title={contentFit === 'contain' ? 'Format cinéma' : 'Plein écran zoomé'}
+                  description="Basculer entre bandes noires et remplissage"
+                  badge={contentFit === 'contain' ? 'CINÉ' : 'ZOOM'}
+                  onPress={toggleContentFit}
+                />
+
+                <OptionRow
+                  index={3}
+                  selected={false}
+                  title="Image dans l'image"
+                  description="Continuer en fenêtre flottante"
+                  badge="PIP"
+                  onPress={() => {
+                    if (document.pictureInPictureElement) {
+                      document.exitPictureInPicture().catch(() => {});
+                    } else if (videoRef.current) {
+                      videoRef.current.requestPictureInPicture().catch(() => {});
+                    }
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Tab 2: Vitesse (Screenshot 2 replica: 2x3 Grid) */}
+            {activeTab === 'speed' && (
+              <div key="speed" className="animate-tab-fade" style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {SPEED_OPTIONS.map((spd, idx) => {
+                  const active = playbackSpeed === spd;
+                  const label = spd === 1.0 ? '1x · Normal' : `${spd}x`;
+                  return (
+                    <button
+                      key={spd}
+                      onClick={() => {
+                        setPlaybackSpeed(spd);
+                        if (videoRef.current) videoRef.current.playbackRate = spd;
+                      }}
+                      className="animate-option-stagger"
+                      style={{
+                        flex: '1 0 calc(33.333% - 8px)',
+                        maxWidth: 'calc(33.333% - 7px)',
+                        padding: '16px 0',
+                        borderRadius: 16,
+                        backgroundColor: active ? '#FFFFFF' : 'rgba(255, 255, 255, 0.05)',
+                        border: active ? '1px solid #FFFFFF' : '1px solid rgba(255, 255, 255, 0.08)',
+                        color: active ? '#09090F' : '#FFFFFF',
+                        fontSize: 14,
+                        fontWeight: active ? 800 : 700,
+                        boxShadow: active ? '0 4px 18px rgba(255, 255, 255, 0.25)' : 'none',
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                        transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
+                        animationDelay: `${idx * 30}ms`,
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Tab 3: Audio & Sous-titres (Screenshot 3 replica) */}
+            {activeTab === 'audio' && (
+              <div key="audio" className="animate-tab-fade" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#7C8394', marginBottom: 2 }}>
+                  Pistes audio ({audioTracks.length})
+                </div>
+                {audioTracks.length === 0 ? (
+                  <div
                     style={{
-                      padding: '6px 12px',
-                      borderRadius: 8,
-                      backgroundColor: currentSub === s.id ? '#FFFFFF' : '#2B303C',
-                      color: currentSub === s.id ? '#09090F' : '#FFFFFF',
-                      fontSize: 12,
-                      fontWeight: currentSub === s.id ? 700 : 500,
-                      cursor: 'pointer',
+                      padding: '16px',
+                      borderRadius: 18,
+                      backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                      border: '1px solid rgba(255, 255, 255, 0.07)',
+                      color: '#9EA4B3',
+                      fontSize: 14,
+                      fontWeight: 500,
                     }}
                   >
-                    {s.name}
-                  </button>
+                    Piste audio principale active.
+                  </div>
+                ) : (
+                  audioTracks.map((t, idx) => (
+                    <OptionRow
+                      key={t.id}
+                      index={idx}
+                      selected={currentAudio === t.id}
+                      title={t.name}
+                      description="Piste audio du flux"
+                      badge={`PISTE ${t.id + 1}`}
+                      onPress={() => {
+                        if (hlsRef.current) hlsRef.current.audioTrack = t.id;
+                        setCurrentAudio(t.id);
+                      }}
+                    />
+                  ))
+                )}
+
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#7C8394', marginTop: 14, marginBottom: 2 }}>
+                  Sous-titres ({subtitles.length})
+                </div>
+
+                <OptionRow
+                  index={0}
+                  selected={currentSub === -1}
+                  title="Désactivés"
+                  description="Aucun sous-titre affiché"
+                  badge="OFF"
+                  onPress={() => selectSubtitle(-1)}
+                />
+
+                {subtitles.map((s, idx) => (
+                  <OptionRow
+                    key={s.id}
+                    index={idx + 1}
+                    selected={currentSub === s.id}
+                    title={s.name}
+                    description="Sous-titres synchronisés"
+                    badge={s.name.toUpperCase().includes('FR') ? 'FR' : 'SUB'}
+                    onPress={() => selectSubtitle(s.id)}
+                  />
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>
