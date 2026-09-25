@@ -56,17 +56,15 @@ export function toProxiedStreamUrl(streamUrl: string): string {
     return streamUrl;
   }
 
-  const isDirectProxyHost =
+  // Seuls les déploiements Vercel ont besoin du proxy car *.vercel.app est bloqué par le WAF upstream
+  const isVercel =
     typeof window !== 'undefined' &&
-    (window.location.hostname.includes('tribuneo.xyz') ||
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1');
+    window.location.hostname.includes('vercel.app');
 
-  const proxyBase = isDirectProxyHost ? '/api/proxy' : 'https://api.tribuneo.xyz/api/proxy';
-
-  if (streamUrl.includes('finepulfe.xyz') || streamUrl.includes('purstream')) {
-    return streamUrl.replace(/^https?:\/\/[^\/]+/, proxyBase);
+  if (isVercel && (streamUrl.includes('finepulfe.xyz') || streamUrl.includes('purstream'))) {
+    return streamUrl.replace(/^https?:\/\/[^\/]+/, 'https://api.tribuneo.xyz/api/proxy');
   }
+
   return streamUrl;
 }
 
@@ -97,29 +95,30 @@ export async function fetchAndSanitizeStream(
   timeoutMs = 8000
 ): Promise<PlayableStreamResult> {
   if (!streamUrl || typeof streamUrl !== 'string') return { url: streamUrl, subtitles: [] };
-  const proxied = toProxiedStreamUrl(streamUrl);
+  const targetUrl = toProxiedStreamUrl(streamUrl);
 
-  if (!proxied.includes('.m3u8')) {
-    return { url: proxied, subtitles: [] };
+  if (!targetUrl.includes('.m3u8')) {
+    return { url: targetUrl, subtitles: [] };
   }
 
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-    const res = await fetch(proxied, {
+    const res = await fetch(targetUrl, {
       signal: ctrl.signal,
       headers: { Accept: 'application/vnd.apple.mpegurl, application/x-mpegurl, */*' },
     });
     clearTimeout(timer);
-    if (!res.ok) return { url: proxied, subtitles: [] };
+    if (!res.ok) return { url: targetUrl, subtitles: [] };
 
-    let text = await res.text();
+    const text = await res.text();
     if (!text.includes('#EXTM3U')) {
-      return { url: proxied, subtitles: [] };
+      return { url: targetUrl, subtitles: [] };
     }
 
     const hasRawVtt = /#EXT-X-MEDIA:TYPE=SUBTITLES[^\r\n]+URI="[^"\r\n]+\.vtt"/i.test(text);
-    const baseUrl = proxied.substring(0, proxied.lastIndexOf('/') + 1);
+    const hasSeparateAudio = /#EXT-X-MEDIA:TYPE=AUDIO[^\r\n]+URI="[^"\r\n]+\.m3u8"/i.test(text);
+    const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
     const resolveUrl = (uri: string) => (/^https?:\/\//i.test(uri) ? uri : new URL(uri, baseUrl).toString());
 
     // Extraction des sous-titres
@@ -142,37 +141,26 @@ export async function fetchAndSanitizeStream(
       });
     }
 
-    if (!hasRawVtt) {
-      return { url: proxied, subtitles };
-    }
-
-    // Supprime faux tags VTT
-    text = text.replace(/#EXT-X-MEDIA:TYPE=SUBTITLES[^\r\n]+URI="[^"\r\n]+\.vtt"[^\r\n]*(\r?\n)?/gi, '');
-    if (!text.includes('TYPE=SUBTITLES')) {
-      text = text.replace(/,SUBTITLES="[^"]+"/gi, '').replace(/SUBTITLES="[^"]+",?/gi, '');
-    }
-
-    // Chemins absolus vers le proxy
-    const lines = text.split(/\r?\n/).map((l) => {
-      const trimmed = l.trim();
-      if (!trimmed) return l;
-      if (trimmed.startsWith('#')) {
-        return l.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${resolveUrl(uri)}"`);
+    // Séries streaming (finepulfe) : master.m3u8 a des tags VTT non-conformes ou une déclaration de flux
+    // audio externe AAC redondante. Les segments TS de la variante sont déjà muxés vidéo + audio (FR/EN).
+    // Basculer directement sur l'URL de la variante élimine le double flux audio, les blocages MSE et le buffering infini à 00:00.
+    if (hasRawVtt || hasSeparateAudio) {
+      const variant = pickVariantUrl(text, baseUrl);
+      if (variant) {
+        return {
+          url: variant,
+          subtitles,
+        };
       }
-      return resolveUrl(trimmed);
-    });
-
-    const cleanedManifest = lines.join('\n');
-    const blob = new Blob([cleanedManifest], { type: 'application/vnd.apple.mpegurl' });
-    const blobUrl = URL.createObjectURL(blob);
+    }
 
     return {
-      url: blobUrl,
+      url: targetUrl,
       subtitles,
     };
   } catch (err) {
     console.warn('Failed to sanitize master playlist:', err);
-    return { url: proxied, subtitles: [] };
+    return { url: targetUrl, subtitles: [] };
   }
 }
 
