@@ -23,7 +23,7 @@ jobs:
           npm ci
           npm run build
           cd ..
-          tar -czf dist.tar.gz -C web dist
+          tar -czf dist.tar.gz --exclude='assets/figma' -C web dist
 
       - name: Deploy to VPS
         env:
