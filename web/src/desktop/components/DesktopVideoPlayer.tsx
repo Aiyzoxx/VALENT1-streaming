@@ -60,7 +60,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   const [currentSub, setCurrentSub] = useState(-1);
   const [isBuffering, setIsBuffering] = useState(true);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [resolvedUrl, setResolvedUrl] = useState<string>(() => toProxiedStreamUrl(streamUrl));
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
   const [externalSubs, setExternalSubs] = useState<ExternalSubtitle[]>([]);
   const [seekingLeft, setSeekingLeft] = useState(false);
   const [seekingRight, setSeekingRight] = useState(false);
@@ -148,7 +148,8 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
+        lowLatencyMode: Boolean(isLive),
+        backBufferLength: 90,
       });
 
       hlsRef.current = hls;
@@ -172,8 +173,6 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
             setControlsVisible(true);
           });
       });
-
-
 
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
         setSubtitles(
@@ -210,6 +209,10 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       return () => {
         hls.destroy();
         hlsRef.current = null;
+        if (video) {
+          video.removeAttribute('src');
+          video.load();
+        }
       };
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = resolvedUrl;
@@ -390,6 +393,10 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
         onTimeUpdate={handleTimeUpdate}
         onWaiting={() => setIsBuffering(true)}
         onPlaying={() => setIsBuffering(false)}
+        onCanPlay={() => setIsBuffering(false)}
+        onLoadedData={() => setIsBuffering(false)}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
         onClick={togglePlay}
         style={{
           width: '100%',

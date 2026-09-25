@@ -61,7 +61,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
   const [currentSub, setCurrentSub] = useState(-1); // -1 = Off
   const [isBuffering, setIsBuffering] = useState(true);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [resolvedUrl, setResolvedUrl] = useState<string>(() => toProxiedStreamUrl(streamUrl));
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
   const [externalSubs, setExternalSubs] = useState<ExternalSubtitle[]>([]);
   const [seekingLeft, setSeekingLeft] = useState(false);
   const [seekingRight, setSeekingRight] = useState(false);
@@ -151,7 +151,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
+        lowLatencyMode: Boolean(isLive),
         backBufferLength: 90,
       });
 
@@ -217,6 +217,10 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
       return () => {
         hls.destroy();
         hlsRef.current = null;
+        if (video) {
+          video.removeAttribute('src');
+          video.load();
+        }
       };
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native Safari support
@@ -373,6 +377,10 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
         onTimeUpdate={handleTimeUpdate}
         onWaiting={() => setIsBuffering(true)}
         onPlaying={() => setIsBuffering(false)}
+        onCanPlay={() => setIsBuffering(false)}
+        onLoadedData={() => setIsBuffering(false)}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
         style={{
           width: '100%',
           height: '100%',
