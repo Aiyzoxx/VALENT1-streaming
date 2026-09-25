@@ -15,6 +15,7 @@ import { DesktopHistoryView } from './views/DesktopHistoryView';
 import { DesktopProfileView } from './views/DesktopProfileView';
 import { DesktopDetailModal } from './components/DesktopDetailModal';
 import { DesktopVideoPlayer } from './components/DesktopVideoPlayer';
+import { toProxiedStreamUrl } from '../shared/api/hls';
 
 interface ActiveStream {
   streamUrl: string;
@@ -77,7 +78,7 @@ export const DesktopApp: React.FC = () => {
     const progressKey = episode ? `${item.id}_ep_${episode.id}` : item.id;
     const progress = getProgress(progressKey) || getProgress(item.id);
     const initialTime = progress && !progress.completed ? progress.currentTime : 0;
-    const streamUrl = episode ? episode.streamUrl : item.streamUrl;
+    const streamUrl = toProxiedStreamUrl(episode ? episode.streamUrl : item.streamUrl);
 
     setActiveStream({
       streamUrl,

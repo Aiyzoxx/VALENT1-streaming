@@ -13,7 +13,13 @@ import {
   IoReloadOutline,
 } from 'react-icons/io5';
 import { formatTime } from '../../shared/utils/format';
-import { resolvePlayableStreamUrl, resolveVariantUrl } from '../../shared/api/hls';
+import {
+  fetchAndSanitizeStream,
+  resolvePlayableStreamUrl,
+  resolveVariantUrl,
+  toProxiedStreamUrl,
+  ExternalSubtitle,
+} from '../../shared/api/hls';
 
 interface DesktopVideoPlayerProps {
   streamUrl: string;
@@ -56,7 +62,8 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   const [currentSub, setCurrentSub] = useState(-1);
   const [isBuffering, setIsBuffering] = useState(true);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [resolvedUrl, setResolvedUrl] = useState<string>(streamUrl);
+  const [resolvedUrl, setResolvedUrl] = useState<string>(() => toProxiedStreamUrl(streamUrl));
+  const [externalSubs, setExternalSubs] = useState<ExternalSubtitle[]>([]);
   const [seekingLeft, setSeekingLeft] = useState(false);
   const [seekingRight, setSeekingRight] = useState(false);
   const [centerFeedback, setCenterFeedback] = useState<{
@@ -96,8 +103,15 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
   useEffect(() => {
     let alive = true;
     fallbackTriedRef.current = false;
-    resolvePlayableStreamUrl(streamUrl).then((url) => {
-      if (alive) setResolvedUrl(url);
+    fetchAndSanitizeStream(streamUrl).then((res) => {
+      if (!alive) return;
+      setResolvedUrl(res.url);
+      if (res.subtitles && res.subtitles.length > 0) {
+        setExternalSubs(res.subtitles);
+        setSubtitles(res.subtitles.map((s) => ({ id: s.id, name: s.label })));
+        const def = res.subtitles.find((s) => s.isDefault);
+        if (def) setCurrentSub(def.id);
+      }
     });
     return () => {
       alive = false;
@@ -354,6 +368,7 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
       <video
         ref={videoRef}
         playsInline
+        crossOrigin="anonymous"
         onTimeUpdate={handleTimeUpdate}
         onWaiting={() => setIsBuffering(true)}
         onPlaying={() => setIsBuffering(false)}
@@ -363,7 +378,18 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
           height: '100%',
           objectFit: 'contain',
         }}
-      />
+      >
+        {externalSubs.map((s) => (
+          <track
+            key={s.id}
+            kind="subtitles"
+            label={s.label}
+            src={s.src}
+            srcLang={s.lang}
+            default={currentSub === s.id}
+          />
+        ))}
+      </video>
 
       {/* Buffering spinner */}
       {isBuffering && !streamError && (
@@ -826,6 +852,11 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
                 <button
                   onClick={() => {
                     if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
+                    if (videoRef.current && videoRef.current.textTracks) {
+                      for (let i = 0; i < videoRef.current.textTracks.length; i++) {
+                        videoRef.current.textTracks[i].mode = 'disabled';
+                      }
+                    }
                     setCurrentSub(-1);
                   }}
                   style={{
@@ -844,7 +875,13 @@ export const DesktopVideoPlayer: React.FC<DesktopVideoPlayerProps> = ({
                   <button
                     key={s.id}
                     onClick={() => {
-                      if (hlsRef.current) hlsRef.current.subtitleTrack = s.id;
+                      if (hlsRef.current && hlsRef.current.subtitleTracks.length > 0) {
+                        hlsRef.current.subtitleTrack = s.id;
+                      } else if (videoRef.current && videoRef.current.textTracks) {
+                        for (let i = 0; i < videoRef.current.textTracks.length; i++) {
+                          videoRef.current.textTracks[i].mode = (i === s.id) ? 'showing' : 'disabled';
+                        }
+                      }
                       setCurrentSub(s.id);
                     }}
                     style={{

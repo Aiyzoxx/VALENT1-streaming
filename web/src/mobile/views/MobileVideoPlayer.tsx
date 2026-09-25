@@ -11,7 +11,13 @@ import {
   IoReloadOutline,
 } from 'react-icons/io5';
 import { formatTime } from '../../shared/utils/format';
-import { resolvePlayableStreamUrl, resolveVariantUrl } from '../../shared/api/hls';
+import {
+  fetchAndSanitizeStream,
+  resolvePlayableStreamUrl,
+  resolveVariantUrl,
+  toProxiedStreamUrl,
+  ExternalSubtitle,
+} from '../../shared/api/hls';
 
 interface MobileVideoPlayerProps {
   streamUrl: string;
@@ -55,7 +61,8 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
   const [currentSub, setCurrentSub] = useState(-1); // -1 = Off
   const [isBuffering, setIsBuffering] = useState(true);
   const [streamError, setStreamError] = useState<string | null>(null);
-  const [resolvedUrl, setResolvedUrl] = useState<string>(streamUrl);
+  const [resolvedUrl, setResolvedUrl] = useState<string>(() => toProxiedStreamUrl(streamUrl));
+  const [externalSubs, setExternalSubs] = useState<ExternalSubtitle[]>([]);
   const [seekingLeft, setSeekingLeft] = useState(false);
   const [seekingRight, setSeekingRight] = useState(false);
   const [centerFeedback, setCenterFeedback] = useState<{
@@ -96,8 +103,15 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
   useEffect(() => {
     let alive = true;
     fallbackTriedRef.current = false;
-    resolvePlayableStreamUrl(streamUrl).then((url) => {
-      if (alive) setResolvedUrl(url);
+    fetchAndSanitizeStream(streamUrl).then((res) => {
+      if (!alive) return;
+      setResolvedUrl(res.url);
+      if (res.subtitles && res.subtitles.length > 0) {
+        setExternalSubs(res.subtitles);
+        setSubtitles(res.subtitles.map((s) => ({ id: s.id, name: s.label })));
+        const def = res.subtitles.find((s) => s.isDefault);
+        if (def) setCurrentSub(def.id);
+      }
     });
     return () => {
       alive = false;
@@ -330,6 +344,7 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
       <video
         ref={videoRef}
         playsInline
+        crossOrigin="anonymous"
         onTimeUpdate={handleTimeUpdate}
         onWaiting={() => setIsBuffering(true)}
         onPlaying={() => setIsBuffering(false)}
@@ -338,7 +353,18 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
           height: '100%',
           objectFit: 'contain',
         }}
-      />
+      >
+        {externalSubs.map((s) => (
+          <track
+            key={s.id}
+            kind="subtitles"
+            label={s.label}
+            src={s.src}
+            srcLang={s.lang}
+            default={currentSub === s.id}
+          />
+        ))}
+      </video>
 
       {/* Buffering spinner */}
       {isBuffering && !streamError && (
@@ -884,6 +910,11 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
                 <button
                   onClick={() => {
                     if (hlsRef.current) hlsRef.current.subtitleTrack = -1;
+                    if (videoRef.current && videoRef.current.textTracks) {
+                      for (let i = 0; i < videoRef.current.textTracks.length; i++) {
+                        videoRef.current.textTracks[i].mode = 'disabled';
+                      }
+                    }
                     setCurrentSub(-1);
                     setShowSettings(false);
                   }}
@@ -905,7 +936,13 @@ export const MobileVideoPlayer: React.FC<MobileVideoPlayerProps> = ({
                   <button
                     key={s.id}
                     onClick={() => {
-                      if (hlsRef.current) hlsRef.current.subtitleTrack = s.id;
+                      if (hlsRef.current && hlsRef.current.subtitleTracks.length > 0) {
+                        hlsRef.current.subtitleTrack = s.id;
+                      } else if (videoRef.current && videoRef.current.textTracks) {
+                        for (let i = 0; i < videoRef.current.textTracks.length; i++) {
+                          videoRef.current.textTracks[i].mode = (i === s.id) ? 'showing' : 'disabled';
+                        }
+                      }
                       setCurrentSub(s.id);
                       setShowSettings(false);
                     }}

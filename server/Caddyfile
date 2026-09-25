@@ -1,9 +1,5 @@
-api.tribuneo.xyz {
-	reverse_proxy pocketbase:8090
-}
-
-stream.tribuneo.xyz {
-	# Proxy de flux HLS vers finepulfe (contourne Cloudflare sans quota)
+api.tribuneo.xyz, stream.tribuneo.xyz {
+	# 1. Reverse proxy streaming HLS vers finepulfe
 	handle_path /api/proxy/* {
 		reverse_proxy https://free.finepulfe.xyz {
 			header_up Host free.finepulfe.xyz
@@ -13,8 +9,18 @@ stream.tribuneo.xyz {
 		}
 	}
 
-	# Application Web StreamFlow (build Vite)
-	root * /var/www/dist
-	file_server
-	try_files {path} /index.html
+	# 2. PocketBase API & Admin dashboard
+	handle /api/* {
+		reverse_proxy pocketbase:8090
+	}
+	handle /_* {
+		reverse_proxy pocketbase:8090
+	}
+
+	# 3. Application Web StreamFlow (Vite SPA)
+	handle {
+		root * /var/www/dist
+		file_server
+		try_files {path} /index.html
+	}
 }
